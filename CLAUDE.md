@@ -53,11 +53,11 @@ alembic upgrade head
 
 ## Deployment
 
-This repo only produces an image. Deploy is in `andicoder/ansible-home` under `--tags vocab-api` (or `--tags vocab` for the whole stack including anki-sync).
+This repo only produces an image. The image is built + pushed to `ghcr.io/andicoder/vocab-api` by `.github/workflows/build.yml` on every push to `main` (tag `latest`) and on git tags `v*` (semver tag).
 
-The image gets built + pushed to `ghcr.io/andicoder/vocab-api` by `.github/workflows/build.yml` on every push to `main` (tag `latest`) and on git tags `v*` (semver tag).
+The deploy pipeline lives in a separate (private) infrastructure repo and consumes the image. This repo doesn't need to know about it.
 
 ## Out of scope (for now)
 
-- Translation, audio TTS, Anki-write, Web-UI, Browser-Extension, Kindle import — see `docs/PLAN_VOCAB_SERVICE.md` in `ansible-home` (Phases 2d–2g).
+- Translation, audio TTS, Anki-write, Web-UI, Browser-Extension, Kindle import — these land in later phases.
 - Multi-language support beyond English source / German target. Schema is open for it but the code paths assume `en→de`.
