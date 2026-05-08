@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from collections.abc import Iterator
@@ -517,6 +518,83 @@ async def test_process_entry_logs_needs_review_outcome(
         and "verdict=UNCLEAR" in m
         for m in msgs
     ), msgs
+
+
+def test_backoff_seconds_grows_with_attempt():
+    from vocab_api.worker import _backoff_seconds
+
+    # Equal-jitter range: [raw/2, raw] with raw = base * 2^(n-1) capped at cap.
+    # Sample many times to assert distribution bounds without flakiness.
+    samples_1 = [_backoff_seconds(1, base=5.0, cap=300.0) for _ in range(200)]
+    samples_3 = [_backoff_seconds(3, base=5.0, cap=300.0) for _ in range(200)]
+    samples_5 = [_backoff_seconds(5, base=5.0, cap=300.0) for _ in range(200)]
+
+    assert all(2.5 <= s <= 5.0 for s in samples_1)
+    assert all(10.0 <= s <= 20.0 for s in samples_3)  # raw = 5 * 2^2 = 20
+    assert all(40.0 <= s <= 80.0 for s in samples_5)  # raw = 5 * 2^4 = 80
+    # Sanity: jitter actually spreads — the min and max in 200 samples
+    # should not be identical.
+    assert min(samples_3) < max(samples_3)
+
+
+def test_backoff_seconds_capped_for_large_attempt():
+    from vocab_api.worker import _backoff_seconds
+
+    samples = [_backoff_seconds(20, base=5.0, cap=300.0) for _ in range(200)]
+    assert all(150.0 <= s <= 300.0 for s in samples)
+    assert max(samples) <= 300.0
+
+
+async def test_worker_loop_backs_off_exponentially_on_consecutive_failures(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Drive _worker_loop directly with a stub _process_one that raises three
+    # times then succeeds. Capture the asyncio.sleep durations and assert they
+    # grow on failures and reset on success.
+    from vocab_api import worker as worker_mod
+
+    failures_remaining = [3]
+
+    async def failing_process_one(*, session_factory, deps):
+        if failures_remaining[0] > 0:
+            failures_remaining[0] -= 1
+            raise RuntimeError("simulated transient failure")
+        return False  # quiet success: no work
+
+    sleeps: list[float] = []
+    cancel_after = [10]  # safety net: stop the loop eventually
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        cancel_after[0] -= 1
+        if cancel_after[0] <= 0:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(worker_mod, "_process_one", failing_process_one)
+    monkeypatch.setattr(worker_mod.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await worker_mod._worker_loop(
+            session_factory=SessionLocal,
+            deps=WorkerDeps(  # type: ignore[arg-type]
+                gemini=None,  # unused: failing_process_one ignores deps
+                tts=None,
+                storage=None,
+                anki_writer=None,
+                cache_session_factory=SessionLocal,
+            ),
+            poll_interval_s=5.0,
+            throttle_s=1.0,
+        )
+
+    failure_sleeps = sleeps[:3]
+    # Equal-jitter: attempt n sleeps in [raw/2, raw], raw = 5 * 2^(n-1) capped.
+    assert 2.5 <= failure_sleeps[0] <= 5.0
+    assert 5.0 <= failure_sleeps[1] <= 10.0
+    assert 10.0 <= failure_sleeps[2] <= 20.0
+    # The first post-success sleep is the regular empty-queue poll, not
+    # backoff — proves the counter resets.
+    assert sleeps[3] == 5.0
 
 
 async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_path: Path):

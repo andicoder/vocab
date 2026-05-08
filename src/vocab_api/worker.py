@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -15,6 +16,22 @@ from .models import Entry, User
 from .operations import ApprovalDeps, write_entry_to_anki
 
 log = logging.getLogger(__name__)
+
+# Cap the worker's exponential backoff at 5 minutes. After ~7 consecutive
+# failures with base=5s the unjittered value already exceeds this; further
+# failures keep sleeping at the cap (#16).
+_BACKOFF_CAP_S = 300.0
+
+
+def _backoff_seconds(attempt: int, *, base: float, cap: float) -> float:
+    """Equal-jitter exponential backoff (AWS-style).
+
+    Returns a random value in [raw/2, raw] where raw = base * 2**(attempt-1)
+    capped at `cap`. Equal jitter (rather than full jitter) keeps a useful
+    floor so we don't drop back to near-zero sleeps mid-incident, while
+    still spreading retries enough to avoid lock-step hammering."""
+    raw = min(base * (2 ** (attempt - 1)), cap)
+    return random.uniform(raw / 2, raw)
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +195,7 @@ async def _worker_loop(
     poll_interval_s: float,
     throttle_s: float,
 ) -> None:
+    consecutive_failures = 0
     while True:
         try:
             processed = await _process_one(session_factory=session_factory, deps=deps)
@@ -185,9 +203,19 @@ async def _worker_loop(
             raise
         except Exception:
             log.exception("worker iteration failed")
-            await asyncio.sleep(poll_interval_s)
+            consecutive_failures += 1
+            backoff = _backoff_seconds(
+                consecutive_failures, base=poll_interval_s, cap=_BACKOFF_CAP_S
+            )
+            log.warning(
+                "worker backoff %.1fs after %s consecutive errors",
+                backoff,
+                consecutive_failures,
+            )
+            await asyncio.sleep(backoff)
             continue
 
+        consecutive_failures = 0
         # Throttle when work was found to spread load; back off harder when
         # the queue is empty to avoid hammering Postgres for no reason.
         await asyncio.sleep(throttle_s if processed else poll_interval_s)
