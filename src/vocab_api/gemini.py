@@ -101,7 +101,10 @@ class GeminiClient:
         body: dict[str, Any] = {"contents": [{"parts": [{"text": prompt}]}]}
         if response_mime_type:
             body["generationConfig"] = {"responseMimeType": response_mime_type}
-        response = await self._http.post(url, params={"key": self._api_key}, json=body)
+        # Key goes in a header, not the query string — httpx renders the
+        # full URL inside HTTPStatusError, so a leaked stack trace would
+        # otherwise dump the key into pod logs (#15).
+        response = await self._http.post(url, headers={"x-goog-api-key": self._api_key}, json=body)
         response.raise_for_status()
         data = response.json()
         return cast(str, data["candidates"][0]["content"]["parts"][0]["text"])
