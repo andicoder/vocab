@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse, Response
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..audio import (
     AudioStorage,
@@ -14,7 +14,7 @@ from ..audio import (
 from ..auth import current_user
 from ..config import settings
 from ..db import get_session
-from ..deps import get_storage, get_tts
+from ..deps import get_session_factory, get_storage, get_tts
 from ..models import User
 
 router = APIRouter(tags=["audio"])
@@ -27,11 +27,18 @@ async def live_audio(
     session: Annotated[AsyncSession, Depends(get_session)],
     tts: Annotated[TtsClient, Depends(get_tts)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
+    session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
 ) -> Response:
     voice = settings.audio_voice
     lang = "en"
     await synthesize_with_cache(
-        session=session, tts=tts, storage=storage, word=word, voice=voice, lang=lang
+        session=session,
+        cache_session_factory=session_factory,
+        tts=tts,
+        storage=storage,
+        word=word,
+        voice=voice,
+        lang=lang,
     )
     await session.commit()
 

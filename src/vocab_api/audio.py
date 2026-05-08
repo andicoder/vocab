@@ -6,7 +6,8 @@ from typing import Protocol
 import aioboto3
 import edge_tts
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .config import settings
 from .models import AudioCache
@@ -126,6 +127,7 @@ def audio_key(word: str, voice: str, lang: str) -> str:
 async def synthesize_with_cache(
     *,
     session: AsyncSession,
+    cache_session_factory: async_sessionmaker[AsyncSession],
     tts: TtsClient,
     storage: AudioStorage,
     word: str,
@@ -144,6 +146,9 @@ async def synthesize_with_cache(
     data = await tts.synthesize(text=word, voice=voice)
     key = audio_key(word, voice, lang)
     await storage.put(key=key, data=data, content_type="audio/mpeg")
-    session.add(AudioCache(word=word, voice=voice, lang=lang, s3_key=key))
-    await session.flush()
+    try:
+        async with cache_session_factory() as cache_session, cache_session.begin():
+            cache_session.add(AudioCache(word=word, voice=voice, lang=lang, s3_key=key))
+    except IntegrityError:
+        pass
     return storage.public_url(key)

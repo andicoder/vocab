@@ -6,7 +6,8 @@ from typing import Any, Literal, cast
 import httpx
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .models import TranslationCache
 
@@ -100,6 +101,7 @@ def _sentence_hash(sentence: str | None) -> str | None:
 async def translate_with_cache(
     *,
     session: AsyncSession,
+    cache_session_factory: async_sessionmaker[AsyncSession],
     gemini: GeminiClient,
     word: str,
     sentence: str | None,
@@ -123,16 +125,19 @@ async def translate_with_cache(
         )
 
     result = await gemini.translate(word=word, sentence=sentence)
-    session.add(
-        TranslationCache(
-            word=word,
-            sentence_hash=sh,
-            lang=lang,
-            lemma=result.lemma,
-            translation=result.translation,
-            alternatives=result.alternatives,
-            ipa=result.ipa,
-        )
-    )
-    await session.flush()
+    try:
+        async with cache_session_factory() as cache_session, cache_session.begin():
+            cache_session.add(
+                TranslationCache(
+                    word=word,
+                    sentence_hash=sh,
+                    lang=lang,
+                    lemma=result.lemma,
+                    translation=result.translation,
+                    alternatives=result.alternatives,
+                    ipa=result.ipa,
+                )
+            )
+    except IntegrityError:
+        pass
     return result

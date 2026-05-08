@@ -9,14 +9,20 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, Up
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..anki_writer import AnkiWriter
 from ..audio import AudioStorage, TtsClient
 from ..auth import current_user
 from ..config import settings
 from ..db import get_session
-from ..deps import get_anki_writer, get_gemini, get_storage, get_tts
+from ..deps import (
+    get_anki_writer,
+    get_gemini,
+    get_session_factory,
+    get_storage,
+    get_tts,
+)
 from ..gemini import GeminiClient
 from ..i18n import current_locale, translator_for
 from ..models import Entry, User
@@ -121,6 +127,7 @@ async def htmx_create_entry(
     tts: Annotated[TtsClient, Depends(get_tts)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
     anki_writer: Annotated[AnkiWriter, Depends(get_anki_writer)],
+    session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
     word: Annotated[str, Form()],
     sentence: Annotated[str | None, Form()] = None,
     source: Annotated[str | None, Form()] = None,
@@ -145,6 +152,7 @@ async def htmx_create_entry(
                     tts=tts,
                     storage=storage,
                     anki_writer=anki_writer,
+                    cache_session_factory=session_factory,
                     voice=settings.audio_voice,
                 )
         except (TimeoutError, httpx.HTTPError):
