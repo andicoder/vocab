@@ -6,8 +6,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from vocab_api.anki_writer import AnkiWriter
 from vocab_api.audio import LocalDirAudioStorage, audio_key
-from vocab_api.deps import get_gemini, get_storage, get_tts
+from vocab_api.deps import get_anki_writer, get_gemini, get_storage, get_tts
 from vocab_api.gemini import GeminiClient
 from vocab_api.main import app
 
@@ -93,3 +94,98 @@ def test_audio_route_local_returns_file(http_client: TestClient, tmp_path: Path)
 
     expected_key = audio_key("expedition", "en-US-AriaNeural", "en")
     assert (tmp_path / expected_key).exists()
+
+
+def test_approve_writes_anki_card_and_marks_synced(http_client: TestClient, tmp_path: Path):
+    audio_dir = tmp_path / "audio"
+    anki_root = tmp_path / "anki"
+    storage = LocalDirAudioStorage(root=audio_dir, public_url_base="/audio")
+    anki_writer = AnkiWriter(root=anki_root)
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+
+    create = http_client.post(
+        "/vocab",
+        json={"word": "expedition"},
+        headers={"X-authentik-username": "alice"},
+    )
+    assert create.status_code == 201, create.text
+    entry_id = create.json()["id"]
+
+    response = http_client.post(
+        f"/vocab/{entry_id}/approve",
+        json={
+            "lemma": "expedition",
+            "translation": "die Expedition",
+            "alternatives": "die Reise",
+            "ipa": "/ˌɛkspɪˈdɪʃən/",
+        },
+        headers={"X-authentik-username": "alice"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "synced"
+    assert body["anki_card_id"] is not None
+    assert body["approved_at"] is not None
+    assert body["synced_at"] is not None
+    assert (anki_root / "alice" / "collection.anki2").exists()
+
+
+def test_approve_rejects_untranslated_entry(http_client: TestClient, tmp_path: Path):
+    storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
+    anki_writer = AnkiWriter(root=tmp_path / "anki")
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+
+    create = http_client.post(
+        "/vocab",
+        json={"word": "expedition"},
+        headers={"X-authentik-username": "alice"},
+    )
+    entry_id = create.json()["id"]
+
+    response = http_client.post(
+        f"/vocab/{entry_id}/approve",
+        json={},
+        headers={"X-authentik-username": "alice"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_reject_marks_rejected(http_client: TestClient):
+    create = http_client.post(
+        "/vocab",
+        json={"word": "expedition"},
+        headers={"X-authentik-username": "alice"},
+    )
+    entry_id = create.json()["id"]
+
+    response = http_client.post(
+        f"/vocab/{entry_id}/reject",
+        headers={"X-authentik-username": "alice"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "rejected"
+
+
+def test_approve_other_users_entry_404(http_client: TestClient, tmp_path: Path):
+    storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
+    anki_writer = AnkiWriter(root=tmp_path / "anki")
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+
+    create = http_client.post(
+        "/vocab",
+        json={"word": "expedition"},
+        headers={"X-authentik-username": "alice"},
+    )
+    entry_id = create.json()["id"]
+
+    response = http_client.post(
+        f"/vocab/{entry_id}/approve",
+        json={"lemma": "x", "translation": "y"},
+        headers={"X-authentik-username": "bob"},
+    )
+    assert response.status_code == 404

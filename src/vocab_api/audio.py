@@ -18,6 +18,7 @@ class TtsClient(Protocol):
 
 class AudioStorage(Protocol):
     async def put(self, *, key: str, data: bytes, content_type: str) -> None: ...
+    async def fetch(self, key: str) -> bytes: ...
     def public_url(self, key: str) -> str: ...
 
 
@@ -47,6 +48,9 @@ class LocalDirAudioStorage:
         path = self._root / key
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+
+    async def fetch(self, key: str) -> bytes:
+        return await asyncio.to_thread((self._root / key).read_bytes)
 
     def public_url(self, key: str) -> str:
         return f"{self._public_url_base}/{key}"
@@ -82,6 +86,17 @@ class S3AudioStorage:
             await client.put_object(
                 Bucket=self._bucket, Key=key, Body=data, ContentType=content_type
             )
+
+    async def fetch(self, key: str) -> bytes:
+        async with self._session.client(
+            "s3",
+            endpoint_url=self._endpoint_url,
+            region_name=self._region,
+            aws_access_key_id=self._access_key,
+            aws_secret_access_key=self._secret_key,
+        ) as client:
+            obj = await client.get_object(Bucket=self._bucket, Key=key)
+            return await obj["Body"].read()  # type: ignore[no-any-return]
 
     def public_url(self, key: str) -> str:
         return f"{self._public_url_base}/{key}"

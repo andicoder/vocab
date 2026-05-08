@@ -1,5 +1,6 @@
 from fastapi import Request
 
+from .anki_writer import AnkiWriter
 from .audio import AudioStorage, TtsClient
 from .gemini import GeminiClient
 
@@ -14,3 +15,7 @@ def get_tts(request: Request) -> TtsClient:
 
 def get_storage(request: Request) -> AudioStorage:
     return request.app.state.storage  # type: ignore[no-any-return]
+
+
+def get_anki_writer(request: Request) -> AnkiWriter:
+    return request.app.state.anki_writer  # type: ignore[no-any-return]

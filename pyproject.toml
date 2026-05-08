@@ -20,6 +20,7 @@ dependencies = [
     "httpx>=0.28",
     "edge-tts>=7.0",
     "aioboto3>=13.2",
+    "anki>=25.9",
 ]
 
 [project.optional-dependencies]
@@ -45,5 +46,5 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [[tool.mypy.overrides]]
-module = ["aioboto3", "aioboto3.*"]
+module = ["aioboto3", "aioboto3.*", "anki", "anki.*"]
 ignore_missing_imports = true

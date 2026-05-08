@@ -1,10 +1,12 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
 
 from . import __version__
+from .anki_writer import AnkiWriter
 from .audio import EdgeTtsClient, make_storage_from_settings
 from .config import settings
 from .db import SessionLocal
@@ -24,10 +26,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     tts = EdgeTtsClient()
     storage = make_storage_from_settings()
+    anki_writer = AnkiWriter(
+        root=Path(settings.anki_collection_root), deck_name=settings.anki_deck_name
+    )
 
     app.state.gemini = gemini
     app.state.tts = tts
     app.state.storage = storage
+    app.state.anki_writer = anki_writer
 
     try:
         if settings.gemini_api_key:

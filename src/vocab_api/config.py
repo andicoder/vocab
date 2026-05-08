@@ -23,5 +23,8 @@ class Settings(BaseSettings):
     audio_local_dir: str = "./var/audio"
     audio_public_url_base: str = ""
 
+    anki_collection_root: str = "./var/anki"
+    anki_deck_name: str = "Default"
+
 
 settings = Settings()
