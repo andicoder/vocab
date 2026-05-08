@@ -5,19 +5,19 @@ Revises:
 Create Date: 2026-05-07 21:59:39.248798
 
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 from vocab_api.config import settings
 
-
 revision: str = "2eb6bf0e3517"
-down_revision: Union[str, Sequence[str], None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 SCHEMA = settings.db_schema

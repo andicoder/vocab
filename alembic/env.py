@@ -6,7 +6,6 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-
 from vocab_api.config import settings
 from vocab_api.models import Base
 
@@ -77,6 +76,7 @@ async def run_async_migrations() -> None:
 
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
+        await connection.commit()
 
     await connectable.dispose()
 

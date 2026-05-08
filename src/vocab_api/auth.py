@@ -10,8 +10,9 @@ from .models import User
 
 
 async def current_user(
+    *,
+    session: Annotated[AsyncSession, Depends(get_session)],
     x_authentik_username: Annotated[str | None, Header()] = None,
-    session: AsyncSession = Depends(get_session),
 ) -> User:
     if not x_authentik_username:
         raise HTTPException(

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -62,6 +63,31 @@ class Entry(Base):
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    meta: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
 
     user: Mapped[User] = relationship(back_populates="entries")
+
+
+class TranslationCache(Base):
+    __tablename__ = "translation_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "word",
+            "sentence_hash",
+            "lang",
+            name="uq_translation_cache_word_sentence_lang",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    word: Mapped[str] = mapped_column(Text, nullable=False)
+    sentence_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lang: Mapped[str] = mapped_column(String, nullable=False, default="en", server_default="en")
+    lemma: Mapped[str] = mapped_column(Text, nullable=False)
+    translation: Mapped[str] = mapped_column(Text, nullable=False)
+    alternatives: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    ipa: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
