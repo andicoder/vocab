@@ -96,6 +96,41 @@ def test_audio_route_local_returns_file(http_client: TestClient, tmp_path: Path)
     assert (tmp_path / expected_key).exists()
 
 
+class _RemoteFakeStorage:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.fetched: list[str] = []
+
+    async def put(self, *, key: str, data: bytes, content_type: str) -> None:
+        self.objects[key] = data
+
+    async def fetch(self, key: str) -> bytes:
+        self.fetched.append(key)
+        return self.objects[key]
+
+    def public_url(self, key: str) -> str:
+        return f"https://private.example.com/{key}"
+
+
+def test_audio_route_remote_streams_bytes_instead_of_redirecting(http_client: TestClient):
+    storage = _RemoteFakeStorage()
+    tts = _FakeTts()
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_tts] = lambda: tts
+
+    response = http_client.get(
+        "/audio/expedition.mp3",
+        headers={"X-authentik-username": "alice"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "audio/mpeg"
+    assert response.content == b"FAKE-MP3:expedition"
+    expected_key = audio_key("expedition", "en-US-AriaNeural", "en")
+    assert storage.fetched == [expected_key]
+
+
 def test_approve_writes_anki_card_and_marks_synced(http_client: TestClient, tmp_path: Path):
     audio_dir = tmp_path / "audio"
     anki_root = tmp_path / "anki"

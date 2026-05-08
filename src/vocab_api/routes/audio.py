@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audio import (
@@ -38,4 +38,5 @@ async def live_audio(
     key = audio_key(word, voice, lang)
     if isinstance(storage, LocalDirAudioStorage):
         return FileResponse(storage.root / key, media_type="audio/mpeg")
-    return RedirectResponse(storage.public_url(key))
+    data = await storage.fetch(key)
+    return Response(content=data, media_type="audio/mpeg")
