@@ -60,6 +60,12 @@ async def process_entry(
     if await _lemma_already_exists(
         session, user_id=user.id, lemma=translation.lemma, lang=entry.lang, exclude_id=entry.id
     ):
+        log.info(
+            "dropped duplicate-lemma entry id=%s user=%s lemma=%s",
+            entry.id,
+            user.id,
+            translation.lemma,
+        )
         await session.delete(entry)
         return translation.lemma
 
@@ -86,8 +92,21 @@ async def process_entry(
             user=user,
             deps=ApprovalDeps(storage=deps.storage, anki_writer=deps.anki_writer, voice=deps.voice),
         )
+        log.info(
+            "synced entry id=%s user=%s lemma=%s",
+            entry.id,
+            user.id,
+            translation.lemma,
+        )
     else:
         entry.status = "needs-review"
+        log.info(
+            "entry needs review id=%s user=%s lemma=%s verdict=%s",
+            entry.id,
+            user.id,
+            translation.lemma,
+            verdict,
+        )
     return None
 
 

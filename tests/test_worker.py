@@ -1,4 +1,6 @@
 import json
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 
 import httpx
@@ -367,6 +369,154 @@ async def test_process_entry_allows_same_lemma_for_different_users(
 
     assert bob_entry.status == "synced"
     assert bob_entry.lemma == "expedition"
+
+
+@pytest.fixture
+def worker_log_records() -> Iterator[list[logging.LogRecord]]:
+    # pytest's caplog does not reliably capture records from the asyncio
+    # path our worker runs on; attach a dedicated handler instead.
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    logger = logging.getLogger("vocab_api.worker")
+    handler = _Capture(level=logging.INFO)
+    prior_level = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(prior_level)
+
+
+async def test_process_entry_logs_synced_outcome(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    worker_log_records: list[logging.LogRecord],
+):
+    user, entry = await _make_pending_entry(db_session)
+    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    msgs = [r.getMessage() for r in worker_log_records]
+    assert any(
+        "synced" in m
+        and f"id={entry.id}" in m
+        and f"user={user.id}" in m
+        and "lemma=expedition" in m
+        for m in msgs
+    ), msgs
+
+
+async def test_process_entry_logs_duplicate_drop(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    worker_log_records: list[logging.LogRecord],
+):
+    user = User(username="alice")
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(
+        Entry(
+            user_id=user.id,
+            word="dozen",
+            lemma="dozen",
+            translation="das Dutzend",
+            status="synced",
+            lang="en",
+        )
+    )
+    pending = Entry(
+        user_id=user.id,
+        word="dozens",
+        sentence="Dozens of pebbles.",
+        lang="en",
+    )
+    db_session.add(pending)
+    await db_session.flush()
+    pending_id = pending.id
+
+    payload = {
+        "lemma": "dozen",
+        "translation": "das Dutzend",
+        "alternatives": "",
+        "ipa": "/ˈdʌzən/",
+    }
+    gemini, http = _gemini_client(_make_translate_only_handler(payload))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=pending,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    msgs = [r.getMessage() for r in worker_log_records]
+    assert any(
+        "duplicate" in m
+        and f"id={pending_id}" in m
+        and f"user={user.id}" in m
+        and "lemma=dozen" in m
+        for m in msgs
+    ), msgs
+
+
+async def test_process_entry_logs_needs_review_outcome(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    worker_log_records: list[logging.LogRecord],
+):
+    user, entry = await _make_pending_entry(db_session, word="bank")
+    payload = {
+        "lemma": "bank",
+        "translation": "die Bank",
+        "alternatives": "",
+        "ipa": "/bæŋk/",
+    }
+    gemini, http = _gemini_client(_make_handler(payload, "UNCLEAR"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    msgs = [r.getMessage() for r in worker_log_records]
+    assert any(
+        "needs review" in m
+        and f"id={entry.id}" in m
+        and f"user={user.id}" in m
+        and "lemma=bank" in m
+        and "verdict=UNCLEAR" in m
+        for m in msgs
+    ), msgs
 
 
 async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_path: Path):
