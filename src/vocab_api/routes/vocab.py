@@ -34,6 +34,7 @@ async def create_entry(
     gemini: Annotated[GeminiClient, Depends(get_gemini)],
     tts: Annotated[TtsClient, Depends(get_tts)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
+    anki_writer: Annotated[AnkiWriter, Depends(get_anki_writer)],
 ) -> Entry:
     entry = Entry(
         user_id=user.id,
@@ -51,9 +52,11 @@ async def create_entry(
                 await process_entry(
                     session=session,
                     entry=entry,
+                    user=user,
                     gemini=gemini,
                     tts=tts,
                     storage=storage,
+                    anki_writer=anki_writer,
                     voice=settings.audio_voice,
                 )
         except (TimeoutError, httpx.HTTPError):

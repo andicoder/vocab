@@ -120,6 +120,7 @@ async def htmx_create_entry(
     gemini: Annotated[GeminiClient, Depends(get_gemini)],
     tts: Annotated[TtsClient, Depends(get_tts)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
+    anki_writer: Annotated[AnkiWriter, Depends(get_anki_writer)],
     word: Annotated[str, Form()],
     sentence: Annotated[str | None, Form()] = None,
     source: Annotated[str | None, Form()] = None,
@@ -139,9 +140,11 @@ async def htmx_create_entry(
                 await process_entry(
                     session=session,
                     entry=entry,
+                    user=user,
                     gemini=gemini,
                     tts=tts,
                     storage=storage,
+                    anki_writer=anki_writer,
                     voice=settings.audio_voice,
                 )
         except (TimeoutError, httpx.HTTPError):

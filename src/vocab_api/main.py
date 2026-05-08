@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 gemini=gemini,
                 tts=tts,
                 storage=storage,
+                anki_writer=anki_writer,
                 voice=settings.audio_voice,
             ):
                 yield

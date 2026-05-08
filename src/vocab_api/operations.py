@@ -26,26 +26,15 @@ async def load_owned_entry(session: AsyncSession, entry_id: int, user: User) -> 
     return entry
 
 
-async def apply_approve(
+async def write_entry_to_anki(
     *,
     entry: Entry,
-    payload: ApprovePayload,
     user: User,
     storage: AudioStorage,
     anki_writer: AnkiWriter,
     voice: str,
 ) -> None:
-    if payload.lemma is not None:
-        entry.lemma = payload.lemma
-    if payload.translation is not None:
-        entry.translation = payload.translation
-    if payload.alternatives is not None:
-        entry.alternatives = payload.alternatives
-    if payload.ipa is not None:
-        entry.ipa = payload.ipa
-
-    if not entry.lemma or not entry.translation:
-        raise HTTPException(status_code=400, detail="entry not yet translated")
+    assert entry.lemma is not None and entry.translation is not None
 
     audio_data: bytes | None = None
     audio_filename: str | None = None
@@ -71,6 +60,36 @@ async def apply_approve(
     entry.status = "synced"
     entry.approved_at = now
     entry.synced_at = now
+
+
+async def apply_approve(
+    *,
+    entry: Entry,
+    payload: ApprovePayload,
+    user: User,
+    storage: AudioStorage,
+    anki_writer: AnkiWriter,
+    voice: str,
+) -> None:
+    if payload.lemma is not None:
+        entry.lemma = payload.lemma
+    if payload.translation is not None:
+        entry.translation = payload.translation
+    if payload.alternatives is not None:
+        entry.alternatives = payload.alternatives
+    if payload.ipa is not None:
+        entry.ipa = payload.ipa
+
+    if not entry.lemma or not entry.translation:
+        raise HTTPException(status_code=400, detail="entry not yet translated")
+
+    await write_entry_to_anki(
+        entry=entry,
+        user=user,
+        storage=storage,
+        anki_writer=anki_writer,
+        voice=voice,
+    )
 
 
 def apply_reject(entry: Entry) -> None:
