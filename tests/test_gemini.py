@@ -54,6 +54,7 @@ async def test_translate_hits_correct_endpoint_and_passes_api_key():
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
+        captured["headers"] = dict(request.headers)
         captured["body"] = json.loads(request.content)
         return httpx.Response(
             200,
@@ -71,10 +72,33 @@ async def test_translate_hits_correct_endpoint_and_passes_api_key():
     assert captured["url"].startswith(
         "https://example.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
     )
-    assert "key=topsecret" in captured["url"]
+    # Key must travel as a header, not a query param — query strings show up
+    # in httpx exception messages and leak into pod logs (#15).
+    assert "key=" not in captured["url"]
+    assert "topsecret" not in captured["url"]
+    assert captured["headers"].get("x-goog-api-key") == "topsecret"
     assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
     prompt_text = captured["body"]["contents"][0]["parts"][0]["text"]
     assert "x" in prompt_text
+
+
+async def test_translate_5xx_does_not_leak_api_key_in_exception_message():
+    # Regression for #15. httpx renders the full request URL inside
+    # HTTPStatusError, so a logged stack trace would dump the API key if it
+    # were a query parameter.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="Service Unavailable")
+
+    client, http = _make_client(handler, api_key="AIza-topsecret-123")
+    try:
+        with pytest.raises(httpx.HTTPStatusError) as excinfo:
+            await client.translate(word="x", sentence=None)
+    finally:
+        await http.aclose()
+
+    err_text = str(excinfo.value)
+    assert "AIza-topsecret-123" not in err_text
+    assert "key=" not in err_text
 
 
 async def test_translate_prompt_includes_part_of_speech_guidance():
