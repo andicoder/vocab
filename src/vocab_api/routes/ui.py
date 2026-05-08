@@ -27,13 +27,14 @@ from ..gemini import GeminiClient
 from ..i18n import current_locale, translator_for
 from ..models import Entry, User
 from ..operations import (
+    ApprovalDeps,
     ApprovePayload,
     apply_approve,
     apply_reject,
     import_kindle_entries,
     load_owned_entry,
 )
-from ..worker import process_entry
+from ..worker import WorkerDeps, process_entry
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _BOOKMARKLET_JS_PATH = Path(__file__).resolve().parent.parent / "static" / "bookmarklet.js"
@@ -142,19 +143,17 @@ async def htmx_create_entry(
     await session.flush()
 
     if settings.gemini_api_key:
+        deps = WorkerDeps(
+            gemini=gemini,
+            tts=tts,
+            storage=storage,
+            anki_writer=anki_writer,
+            cache_session_factory=session_factory,
+            voice=settings.audio_voice,
+        )
         try:
             async with asyncio.timeout(settings.gemini_timeout_s):
-                await process_entry(
-                    session=session,
-                    entry=entry,
-                    user=user,
-                    gemini=gemini,
-                    tts=tts,
-                    storage=storage,
-                    anki_writer=anki_writer,
-                    cache_session_factory=session_factory,
-                    voice=settings.audio_voice,
-                )
+                await process_entry(session=session, entry=entry, user=user, deps=deps)
         except (TimeoutError, httpx.HTTPError):
             pass
 
@@ -186,9 +185,7 @@ async def htmx_approve(
         entry=entry,
         payload=payload,
         user=user,
-        storage=storage,
-        anki_writer=anki_writer,
-        voice=settings.audio_voice,
+        deps=ApprovalDeps(storage=storage, anki_writer=anki_writer, voice=settings.audio_voice),
     )
     await session.commit()
     return HTMLResponse("", status_code=200)

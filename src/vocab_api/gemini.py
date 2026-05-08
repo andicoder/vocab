@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 import httpx
@@ -10,6 +11,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .models import TranslationCache
+
+
+@dataclass(frozen=True, slots=True)
+class TranslationRequest:
+    """Identifies a translation lookup. (word, sentence, lang) jointly key
+    into the `translation_cache` table."""
+
+    word: str
+    sentence: str | None
+    lang: str = "en"
+
 
 Plausibility = Literal["YES", "NO", "UNCLEAR"]
 
@@ -103,17 +115,15 @@ async def translate_with_cache(
     session: AsyncSession,
     cache_session_factory: async_sessionmaker[AsyncSession],
     gemini: GeminiClient,
-    word: str,
-    sentence: str | None,
-    lang: str = "en",
+    request: TranslationRequest,
 ) -> TranslationResult:
-    sh = _sentence_hash(sentence)
+    sh = _sentence_hash(request.sentence)
     stmt = select(TranslationCache).where(
-        TranslationCache.word == word,
+        TranslationCache.word == request.word,
         TranslationCache.sentence_hash.is_(sh)
         if sh is None
         else TranslationCache.sentence_hash == sh,
-        TranslationCache.lang == lang,
+        TranslationCache.lang == request.lang,
     )
     cached = (await session.execute(stmt)).scalar_one_or_none()
     if cached is not None:
@@ -124,14 +134,17 @@ async def translate_with_cache(
             ipa=cached.ipa,
         )
 
-    result = await gemini.translate(word=word, sentence=sentence)
+    result = await gemini.translate(word=request.word, sentence=request.sentence)
+    # Commit the cache row through a fresh session so it survives a rollback
+    # of the outer entry transaction (see #6). UNIQUE constraint makes this
+    # idempotent under concurrent writes for the same request.
     try:
         async with cache_session_factory() as cache_session, cache_session.begin():
             cache_session.add(
                 TranslationCache(
-                    word=word,
+                    word=request.word,
                     sentence_hash=sh,
-                    lang=lang,
+                    lang=request.lang,
                     lemma=result.lemma,
                     translation=result.translation,
                     alternatives=result.alternatives,

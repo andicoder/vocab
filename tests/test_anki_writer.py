@@ -3,26 +3,44 @@ from pathlib import Path
 import pytest
 from anki.collection import Collection
 
-from vocab_api.anki_writer import VOCAB_FIELDS, VOCAB_NOTETYPE, AnkiWriter
+from vocab_api.anki_writer import VOCAB_FIELDS, VOCAB_NOTETYPE, AnkiWriter, VocabCardContent
 
 
 def _open_collection(root: Path, username: str) -> Collection:
     return Collection(str(root / username / "collection.anki2"))
 
 
+def _content(**overrides: object) -> VocabCardContent:
+    base: dict[str, object] = {
+        "word": "x",
+        "lemma": "x",
+        "sentence": None,
+        "translation": "y",
+        "alternatives": "",
+        "ipa": "",
+        "audio_data": None,
+        "audio_filename": None,
+        "source": None,
+    }
+    base.update(overrides)
+    return VocabCardContent(**base)  # type: ignore[arg-type]
+
+
 async def test_write_card_creates_collection_card_and_media(tmp_path: Path):
     writer = AnkiWriter(root=tmp_path)
     card_id = await writer.write_card(
         username="alice",
-        word="expedition",
-        lemma="expedition",
-        sentence="A grand expedition north.",
-        translation="die Expedition",
-        alternatives="die Reise",
-        ipa="/ˌɛkspɪˈdɪʃən/",
-        audio_data=b"FAKE-MP3",
-        audio_filename="abc123.mp3",
-        source="test-source",
+        content=_content(
+            word="expedition",
+            lemma="expedition",
+            sentence="A grand expedition north.",
+            translation="die Expedition",
+            alternatives="die Reise",
+            ipa="/ˌɛkspɪˈdɪʃən/",
+            audio_data=b"FAKE-MP3",
+            audio_filename="abc123.mp3",
+            source="test-source",
+        ),
     )
 
     assert card_id > 0
@@ -32,18 +50,7 @@ async def test_write_card_creates_collection_card_and_media(tmp_path: Path):
 
 async def test_vocab_notetype_has_expected_fields(tmp_path: Path):
     writer = AnkiWriter(root=tmp_path)
-    await writer.write_card(
-        username="alice",
-        word="x",
-        lemma="x",
-        sentence=None,
-        translation="y",
-        alternatives="",
-        ipa="",
-        audio_data=None,
-        audio_filename=None,
-        source=None,
-    )
+    await writer.write_card(username="alice", content=_content())
 
     col = _open_collection(tmp_path, "alice")
     try:
@@ -59,16 +66,7 @@ async def test_second_write_reuses_notetype(tmp_path: Path):
     writer = AnkiWriter(root=tmp_path)
     for word in ("first", "second"):
         await writer.write_card(
-            username="alice",
-            word=word,
-            lemma=word,
-            sentence=None,
-            translation="x",
-            alternatives="",
-            ipa="",
-            audio_data=None,
-            audio_filename=None,
-            source=None,
+            username="alice", content=_content(word=word, lemma=word, translation="x")
         )
 
     col = _open_collection(tmp_path, "alice")
@@ -84,15 +82,17 @@ async def test_card_fields_contain_provided_values(tmp_path: Path):
     writer = AnkiWriter(root=tmp_path)
     card_id = await writer.write_card(
         username="alice",
-        word="expedition",
-        lemma="expedition",
-        sentence="A grand expedition.",
-        translation="die Expedition",
-        alternatives="die Reise, der Forschungsausflug",
-        ipa="/ˌɛkspɪˈdɪʃən/",
-        audio_data=b"x",
-        audio_filename="a.mp3",
-        source="https://example.com/article",
+        content=_content(
+            word="expedition",
+            lemma="expedition",
+            sentence="A grand expedition.",
+            translation="die Expedition",
+            alternatives="die Reise, der Forschungsausflug",
+            ipa="/ˌɛkspɪˈdɪʃən/",
+            audio_data=b"x",
+            audio_filename="a.mp3",
+            source="https://example.com/article",
+        ),
     )
 
     col = _open_collection(tmp_path, "alice")
@@ -114,30 +114,8 @@ async def test_card_fields_contain_provided_values(tmp_path: Path):
 
 async def test_write_card_isolates_users(tmp_path: Path):
     writer = AnkiWriter(root=tmp_path)
-    await writer.write_card(
-        username="alice",
-        word="x",
-        lemma="x",
-        sentence=None,
-        translation="y",
-        alternatives="",
-        ipa="",
-        audio_data=None,
-        audio_filename=None,
-        source=None,
-    )
-    await writer.write_card(
-        username="bob",
-        word="z",
-        lemma="z",
-        sentence=None,
-        translation="w",
-        alternatives="",
-        ipa="",
-        audio_data=None,
-        audio_filename=None,
-        source=None,
-    )
+    await writer.write_card(username="alice", content=_content())
+    await writer.write_card(username="bob", content=_content(word="z", lemma="z", translation="w"))
 
     alice = _open_collection(tmp_path, "alice")
     bob = _open_collection(tmp_path, "bob")
@@ -153,16 +131,7 @@ async def test_write_card_isolates_users(tmp_path: Path):
 async def test_audio_field_empty_when_no_audio(tmp_path: Path, audio_filename: str | None):
     writer = AnkiWriter(root=tmp_path)
     card_id = await writer.write_card(
-        username="alice",
-        word="x",
-        lemma="x",
-        sentence=None,
-        translation="y",
-        alternatives="",
-        ipa="",
-        audio_data=None,
-        audio_filename=audio_filename,
-        source=None,
+        username="alice", content=_content(audio_filename=audio_filename)
     )
 
     col = _open_collection(tmp_path, "alice")

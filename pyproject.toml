@@ -44,7 +44,17 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "N", "SIM"]
+# PLR0913: too many arguments (default max-args=5). Bundle related collaborators
+# into dataclasses or pydantic models instead of growing the parameter list.
+select = ["E", "F", "I", "B", "UP", "N", "SIM", "PLR0913"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI route handlers receive their dependencies as parameters — that is the
+# framework's intended pattern, so the param-count rule does not apply there.
+"src/vocab_api/routes/*.py" = ["PLR0913"]
+# Test fixtures sometimes need many setup args; keeping tests readable trumps
+# the rule.
+"tests/*.py" = ["PLR0913"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

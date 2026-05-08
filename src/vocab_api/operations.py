@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -6,8 +7,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .anki_writer import AnkiWriter
-from .audio import AudioStorage, audio_key
+from .anki_writer import AnkiWriter, VocabCardContent
+from .audio import AudioRequest, AudioStorage, audio_key
 from .kindle import parse_kindle_vocab
 from .models import Entry, User
 
@@ -19,6 +20,15 @@ class ApprovePayload(BaseModel):
     ipa: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ApprovalDeps:
+    """Collaborators needed to finalize an entry into an Anki card."""
+
+    storage: AudioStorage
+    anki_writer: AnkiWriter
+    voice: str
+
+
 async def load_owned_entry(session: AsyncSession, entry_id: int, user: User) -> Entry:
     entry = await session.get(Entry, entry_id)
     if entry is None or entry.user_id != user.id:
@@ -26,24 +36,20 @@ async def load_owned_entry(session: AsyncSession, entry_id: int, user: User) -> 
     return entry
 
 
-async def write_entry_to_anki(
-    *,
-    entry: Entry,
-    user: User,
-    storage: AudioStorage,
-    anki_writer: AnkiWriter,
-    voice: str,
-) -> None:
+async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -> None:
+    # Caller (apply_approve / process_entry) is expected to have populated
+    # these fields before this function runs.
     assert entry.lemma is not None and entry.translation is not None
 
     audio_data: bytes | None = None
     audio_filename: str | None = None
     if entry.audio_url:
-        audio_filename = audio_key(entry.lemma, voice, entry.lang)
-        audio_data = await storage.fetch(audio_filename)
+        audio_filename = audio_key(
+            AudioRequest(word=entry.lemma, voice=deps.voice, lang=entry.lang)
+        )
+        audio_data = await deps.storage.fetch(audio_filename)
 
-    card_id = await anki_writer.write_card(
-        username=user.username,
+    content = VocabCardContent(
         word=entry.word,
         lemma=entry.lemma,
         sentence=entry.sentence,
@@ -54,6 +60,7 @@ async def write_entry_to_anki(
         audio_filename=audio_filename,
         source=entry.source,
     )
+    card_id = await deps.anki_writer.write_card(username=user.username, content=content)
 
     now = datetime.now(UTC)
     entry.anki_card_id = card_id
@@ -67,9 +74,7 @@ async def apply_approve(
     entry: Entry,
     payload: ApprovePayload,
     user: User,
-    storage: AudioStorage,
-    anki_writer: AnkiWriter,
-    voice: str,
+    deps: ApprovalDeps,
 ) -> None:
     if payload.lemma is not None:
         entry.lemma = payload.lemma
@@ -83,13 +88,7 @@ async def apply_approve(
     if not entry.lemma or not entry.translation:
         raise HTTPException(status_code=400, detail="entry not yet translated")
 
-    await write_entry_to_anki(
-        entry=entry,
-        user=user,
-        storage=storage,
-        anki_writer=anki_writer,
-        voice=voice,
-    )
+    await write_entry_to_anki(entry=entry, user=user, deps=deps)
 
 
 def apply_reject(entry: Entry) -> None:

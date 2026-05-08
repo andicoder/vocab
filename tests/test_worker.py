@@ -7,11 +7,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vocab_api.anki_writer import AnkiWriter
-from vocab_api.audio import audio_key
+from vocab_api.audio import AudioRequest, audio_key
 from vocab_api.db import SessionLocal
 from vocab_api.gemini import GeminiClient
 from vocab_api.models import AudioCache, Entry, TranslationCache, User
-from vocab_api.worker import process_entry
+from vocab_api.worker import WorkerDeps, process_entry
 
 
 def _gemini_response(text: str) -> dict:
@@ -91,6 +91,23 @@ _TRANSLATE_PAYLOAD = {
 }
 
 
+def _deps(
+    *,
+    tmp_path: Path,
+    gemini: GeminiClient,
+    tts: _FakeTts,
+    storage: _FakeStorage,
+    anki_writer: AnkiWriter | None = None,
+) -> WorkerDeps:
+    return WorkerDeps(
+        gemini=gemini,
+        tts=tts,
+        storage=storage,
+        anki_writer=anki_writer or AnkiWriter(root=tmp_path),
+        cache_session_factory=SessionLocal,
+    )
+
+
 async def test_process_entry_yes_writes_anki_and_marks_synced(
     db_session: AsyncSession, tmp_path: Path
 ):
@@ -98,18 +115,13 @@ async def test_process_entry_yes_writes_anki_and_marks_synced(
     gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
-    anki_writer = AnkiWriter(root=tmp_path)
 
     try:
         await process_entry(
             session=db_session,
             entry=entry,
             user=user,
-            gemini=gemini,
-            tts=tts,
-            storage=storage,
-            anki_writer=anki_writer,
-            cache_session_factory=SessionLocal,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -126,7 +138,7 @@ async def test_process_entry_yes_writes_anki_and_marks_synced(
     assert entry.audio_url.startswith("https://cdn.example.com/")
     assert tts.calls == [("expedition", "en-US-AriaNeural")]
     assert (tmp_path / "alice" / "collection.anki2").exists()
-    expected_audio = audio_key("expedition", "en-US-AriaNeural", "en")
+    expected_audio = audio_key(AudioRequest(word="expedition"))
     assert (tmp_path / "alice" / "collection.media" / expected_audio).exists()
 
 
@@ -145,18 +157,13 @@ async def test_process_entry_unclear_needs_review(db_session: AsyncSession, tmp_
     )
     tts = _FakeTts()
     storage = _FakeStorage()
-    anki_writer = AnkiWriter(root=tmp_path)
 
     try:
         await process_entry(
             session=db_session,
             entry=entry,
             user=user,
-            gemini=gemini,
-            tts=tts,
-            storage=storage,
-            anki_writer=anki_writer,
-            cache_session_factory=SessionLocal,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -173,18 +180,13 @@ async def test_process_entry_no_needs_review(db_session: AsyncSession, tmp_path:
     gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "NO"))
     tts = _FakeTts()
     storage = _FakeStorage()
-    anki_writer = AnkiWriter(root=tmp_path)
 
     try:
         await process_entry(
             session=db_session,
             entry=entry,
             user=user,
-            gemini=gemini,
-            tts=tts,
-            storage=storage,
-            anki_writer=anki_writer,
-            cache_session_factory=SessionLocal,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -194,23 +196,18 @@ async def test_process_entry_no_needs_review(db_session: AsyncSession, tmp_path:
 
 
 async def test_process_entry_uses_lemma_for_audio(db_session: AsyncSession, tmp_path: Path):
-    """Audio is keyed by lemma so 'expeditions' and 'expedition' share one MP3."""
+    # Audio is keyed by lemma so 'expeditions' and 'expedition' share one MP3.
     user, entry = await _make_pending_entry(db_session, word="expeditions")
     gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
-    anki_writer = AnkiWriter(root=tmp_path)
 
     try:
         await process_entry(
             session=db_session,
             entry=entry,
             user=user,
-            gemini=gemini,
-            tts=tts,
-            storage=storage,
-            anki_writer=anki_writer,
-            cache_session_factory=SessionLocal,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -227,7 +224,6 @@ async def test_process_entry_propagates_translation_error(db_session: AsyncSessi
     gemini, http = _gemini_client(handler)
     tts = _FakeTts()
     storage = _FakeStorage()
-    anki_writer = AnkiWriter(root=tmp_path)
 
     try:
         with pytest.raises(httpx.HTTPStatusError):
@@ -235,11 +231,7 @@ async def test_process_entry_propagates_translation_error(db_session: AsyncSessi
                 session=db_session,
                 entry=entry,
                 user=user,
-                gemini=gemini,
-                tts=tts,
-                storage=storage,
-                anki_writer=anki_writer,
-                cache_session_factory=SessionLocal,
+                deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
             )
     finally:
         await http.aclose()
@@ -257,7 +249,7 @@ class _RaisingAnkiWriter:
         raise RuntimeError("Anki already open, or media currently syncing")
 
 
-async def test_caches_survive_anki_write_failure(db_session: AsyncSession):
+async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
     gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
     tts = _FakeTts()
@@ -270,11 +262,13 @@ async def test_caches_survive_anki_write_failure(db_session: AsyncSession):
                 session=db_session,
                 entry=entry,
                 user=user,
-                gemini=gemini,
-                tts=tts,
-                storage=storage,
-                anki_writer=raising_anki,  # type: ignore[arg-type]
-                cache_session_factory=SessionLocal,
+                deps=_deps(
+                    tmp_path=tmp_path,
+                    gemini=gemini,
+                    tts=tts,
+                    storage=storage,
+                    anki_writer=raising_anki,  # type: ignore[arg-type]
+                ),
             )
     finally:
         await http.aclose()

@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,6 +19,21 @@ VOCAB_FIELDS = [
 ]
 
 
+@dataclass(frozen=True, slots=True)
+class VocabCardContent:
+    """All per-card fields that go into the Anki note."""
+
+    word: str
+    lemma: str
+    sentence: str | None
+    translation: str
+    alternatives: str
+    ipa: str
+    audio_data: bytes | None
+    audio_filename: str | None
+    source: str | None
+
+
 class AnkiWriter:
     def __init__(self, *, root: Path, deck_name: str = "Default") -> None:
         self._root = root
@@ -29,55 +45,19 @@ class AnkiWriter:
     def media_dir(self, username: str) -> Path:
         return self._root / username / "collection.media"
 
-    async def write_card(
-        self,
-        *,
-        username: str,
-        word: str,
-        lemma: str,
-        sentence: str | None,
-        translation: str,
-        alternatives: str,
-        ipa: str,
-        audio_data: bytes | None,
-        audio_filename: str | None,
-        source: str | None,
-    ) -> int:
-        return await asyncio.to_thread(
-            self._write_sync,
-            username=username,
-            word=word,
-            lemma=lemma,
-            sentence=sentence,
-            translation=translation,
-            alternatives=alternatives,
-            ipa=ipa,
-            audio_data=audio_data,
-            audio_filename=audio_filename,
-            source=source,
-        )
+    async def write_card(self, *, username: str, content: VocabCardContent) -> int:
+        # The anki package opens a SQLite Collection synchronously through a
+        # Rust backend; running it on the event loop would block other I/O.
+        return await asyncio.to_thread(self._write_sync, username, content)
 
-    def _write_sync(
-        self,
-        *,
-        username: str,
-        word: str,
-        lemma: str,
-        sentence: str | None,
-        translation: str,
-        alternatives: str,
-        ipa: str,
-        audio_data: bytes | None,
-        audio_filename: str | None,
-        source: str | None,
-    ) -> int:
+    def _write_sync(self, username: str, content: VocabCardContent) -> int:
         col_path = self.collection_path(username)
         col_path.parent.mkdir(parents=True, exist_ok=True)
 
-        if audio_data is not None and audio_filename:
+        if content.audio_data is not None and content.audio_filename:
             media = self.media_dir(username)
             media.mkdir(parents=True, exist_ok=True)
-            (media / audio_filename).write_bytes(audio_data)
+            (media / content.audio_filename).write_bytes(content.audio_data)
 
         col = Collection(str(col_path))
         try:
@@ -86,14 +66,14 @@ class AnkiWriter:
             assert deck_id is not None
 
             note = col.new_note(model)
-            note["Word"] = word
-            note["Lemma"] = lemma
-            note["Sentence"] = sentence or ""
-            note["Translation"] = translation
-            note["Alternatives"] = alternatives
-            note["IPA"] = ipa
-            note["Audio"] = f"[sound:{audio_filename}]" if audio_filename else ""
-            note["Source"] = source or ""
+            note["Word"] = content.word
+            note["Lemma"] = content.lemma
+            note["Sentence"] = content.sentence or ""
+            note["Translation"] = content.translation
+            note["Alternatives"] = content.alternatives
+            note["IPA"] = content.ipa
+            note["Audio"] = f"[sound:{content.audio_filename}]" if content.audio_filename else ""
+            note["Source"] = content.source or ""
             note["DateAdded"] = datetime.now(UTC).date().isoformat()
 
             col.add_note(note, deck_id=deck_id)

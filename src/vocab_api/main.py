@@ -13,7 +13,7 @@ from .config import settings
 from .db import SessionLocal
 from .gemini import GeminiClient
 from .routes import audio, imports, translate, ui, vocab
-from .worker import run_worker
+from .worker import WorkerDeps, run_worker
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -33,21 +33,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         root=Path(settings.anki_collection_root), deck_name=settings.anki_deck_name
     )
 
-    app.state.gemini = gemini
-    app.state.tts = tts
-    app.state.storage = storage
-    app.state.anki_writer = anki_writer
+    deps = WorkerDeps(
+        gemini=gemini,
+        tts=tts,
+        storage=storage,
+        anki_writer=anki_writer,
+        cache_session_factory=SessionLocal,
+        voice=settings.audio_voice,
+    )
+
+    # Stash on app.state so route handlers can build their own deps from the
+    # same instances (see deps.get_worker_deps).
+    app.state.worker_deps = deps
 
     try:
         if settings.gemini_api_key:
-            async with run_worker(
-                session_factory=SessionLocal,
-                gemini=gemini,
-                tts=tts,
-                storage=storage,
-                anki_writer=anki_writer,
-                voice=settings.audio_voice,
-            ):
+            async with run_worker(session_factory=SessionLocal, deps=deps):
                 yield
         else:
             yield
