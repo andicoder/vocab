@@ -53,6 +53,19 @@ alembic upgrade head
 - **Async-first.** Every DB call goes through `AsyncSession`. No `def` route handlers in API code.
 - **Migrations are hand-written.** Do not run `alembic revision --autogenerate` — it requires a live DB and we keep the dev path DB-free. Write the migration manually based on the model diff.
 
+## Logging
+
+- **Setup.** `main.py` calls `logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s", force=True)` once at module top-level. `force=True` because uvicorn installs handlers before our app code runs. Per-module loggers via `log = logging.getLogger(__name__)` — never `print` from production code.
+- **Default level is `INFO`**, overridable per env via `VOCAB_LOG_LEVEL` (mapped through `Settings`, not `os.environ`). Common overrides: `DEBUG` for cache-hit traces, `WARNING` to silence routine outcomes.
+- **Level discipline:**
+  - **INFO** for terminal business outcomes (one per request/job): entry synced, duplicate dropped, import done.
+  - **WARNING** for recoverable anomalies (timeout fallback, retry, missing optional config).
+  - **ERROR** for aborts. Inside `except`, use `log.exception(...)` to include the stack trace.
+  - **DEBUG** for verbose diagnostics off by default (cache hit/miss, request bodies).
+- **Format.** `key=value` for structured-ish lines (`id=%s user=%s lemma=%s`). One line per outcome — no multi-line emit.
+- **Don't log** secrets, raw passwords, or full API keys.
+- **Alembic gotcha.** `alembic/env.py` calls `fileConfig(..., disable_existing_loggers=False)`. Without that flag, alembic's `[loggers]` block silences every non-listed logger after a migration runs — including `vocab_api.*` and any test fixture that captures records.
+
 ## Tests
 
 - One file per module under `tests/test_<module>.py`.

@@ -42,5 +42,7 @@ class Settings(BaseSettings):
     ui_default_locale: str = "de"
     public_base_url: str = ""
 
+    log_level: str = "INFO"
+
 
 settings = Settings()
