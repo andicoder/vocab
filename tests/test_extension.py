@@ -26,17 +26,35 @@ def test_manifest_references_existing_files():
     assert (_EXT / data["options_ui"]["page"]).is_file()
     for icon in data["icons"].values():
         assert (_EXT / icon).is_file()
+    for entry in data["content_scripts"]:
+        for script in entry["js"]:
+            assert (_EXT / script).is_file()
+
+
+def test_manifest_registers_both_context_menu_actions():
+    js = (_EXT / "background.js").read_text(encoding="utf-8")
+    assert "vocab-save-selection" in js
+    assert "vocab-translate-selection" in js
+    assert "Wort speichern" in js
+    assert "Übersetzung anzeigen" in js
+
+
+def test_content_script_listens_for_show_translation():
+    js = (_EXT / "content.js").read_text(encoding="utf-8")
+    assert "show-translation" in js
+    assert "runtime.onMessage" in js
 
 
 def test_background_script_targets_vocab_endpoint():
     js = (_EXT / "background.js").read_text(encoding="utf-8")
     assert "/vocab" in js
+    assert "/translate" in js
     assert 'credentials: "include"' in js
     assert "contextMenus" in js
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
-@pytest.mark.parametrize("filename", ["background.js", "options.js"])
+@pytest.mark.parametrize("filename", ["background.js", "content.js", "options.js"])
 def test_extension_javascript_parses(filename: str):
     result = subprocess.run(
         ["node", "--check", str(_EXT / filename)],

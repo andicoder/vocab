@@ -5,7 +5,8 @@ const DEFAULTS = {
     apiBaseUrl: "https://vocab.example.com"
 };
 
-const MENU_ID = "vocab-save-selection";
+const MENU_SAVE_ID = "vocab-save-selection";
+const MENU_TRANSLATE_ID = "vocab-translate-selection";
 
 async function getConfig() {
     const stored = await api.storage.sync.get(DEFAULTS);
@@ -14,26 +15,55 @@ async function getConfig() {
 
 api.runtime.onInstalled.addListener(() => {
     api.contextMenus.create({
-        id: MENU_ID,
+        id: MENU_SAVE_ID,
         title: "vocab: Wort speichern",
+        contexts: ["selection"]
+    });
+    api.contextMenus.create({
+        id: MENU_TRANSLATE_ID,
+        title: "vocab: Übersetzung anzeigen",
         contexts: ["selection"]
     });
 });
 
 api.contextMenus.onClicked.addListener(async (info, tab) => {
-    if (info.menuItemId !== MENU_ID) return;
     const word = (info.selectionText || "").trim();
     if (!word) {
         await notify("Keine Auswahl");
         return;
     }
     const sentence = await extractSentence(tab, word);
-    const source = info.pageUrl || (tab && tab.url) || "";
-    try {
-        await postEntry({ word, sentence, source });
-        await notify(`Gespeichert: ${word}`);
-    } catch (err) {
-        await notify(`Fehler: ${err.message}`);
+
+    if (info.menuItemId === MENU_SAVE_ID) {
+        const source = info.pageUrl || (tab && tab.url) || "";
+        try {
+            await postEntry({ word, sentence, source });
+            await notify(`Gespeichert: ${word}`);
+        } catch (err) {
+            await notify(`Fehler: ${err.message}`);
+        }
+        return;
+    }
+
+    if (info.menuItemId === MENU_TRANSLATE_ID) {
+        if (tab && tab.id != null) {
+            try {
+                const data = await postTranslate({ word, sentence });
+                await api.tabs.sendMessage(tab.id, {
+                    type: "show-translation",
+                    word, sentence,
+                    translation: data.translation,
+                    alternatives: data.alternatives,
+                    ipa: data.ipa
+                });
+            } catch (err) {
+                await api.tabs.sendMessage(tab.id, {
+                    type: "show-translation",
+                    word, sentence,
+                    error: err.message
+                });
+            }
+        }
     }
 });
 
@@ -78,6 +108,29 @@ async function postEntry({ word, sentence, source }) {
     }
     return res.json();
 }
+
+async function postTranslate({ word, sentence }) {
+    const { apiBaseUrl } = await getConfig();
+    const url = `${apiBaseUrl.replace(/\/$/, "")}/translate`;
+    const res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ word, sentence: sentence || null })
+    });
+    if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+    }
+    return res.json();
+}
+
+api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type !== "save") return false;
+    postEntry(msg)
+        .then((data) => sendResponse({ ok: true, data }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+});
 
 async function notify(message) {
     if (!api.notifications) return;
