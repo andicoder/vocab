@@ -7,7 +7,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .anki_writer import AnkiWriter
+from .anki_sync import AnkiSyncWriter, parse_credentials_json
+from .anki_writer import AnkiBackend, AnkiWriter
 from .audio import EdgeTtsClient, make_storage_from_settings
 from .config import settings
 from .db import SessionLocal
@@ -16,6 +17,22 @@ from .routes import audio, imports, translate, ui, vocab
 from .worker import WorkerDeps, run_worker
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+def _make_anki_backend() -> AnkiBackend:
+    """Pick the Anki backend based on settings.
+
+    `anki_sync_url` set → `AnkiSyncWriter` over the Anki sync HTTP protocol
+    (production, avoids the file-lock conflict described in #5). Otherwise
+    fall back to `AnkiWriter`, the file-based path used in dev/tests."""
+    if settings.anki_sync_url:
+        return AnkiSyncWriter(
+            shadow_root=Path(settings.anki_shadow_root),
+            sync_endpoint=settings.anki_sync_url,
+            credentials=parse_credentials_json(settings.anki_sync_credentials_json),
+            deck_name=settings.anki_deck_name,
+        )
+    return AnkiWriter(root=Path(settings.anki_collection_root), deck_name=settings.anki_deck_name)
 
 
 @asynccontextmanager
@@ -29,9 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     tts = EdgeTtsClient()
     storage = make_storage_from_settings()
-    anki_writer = AnkiWriter(
-        root=Path(settings.anki_collection_root), deck_name=settings.anki_deck_name
-    )
+    anki_writer: AnkiBackend = _make_anki_backend()
 
     deps = WorkerDeps(
         gemini=gemini,

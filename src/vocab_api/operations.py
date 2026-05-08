@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .anki_writer import AnkiWriter, VocabCardContent
+from .anki_writer import AnkiBackend, VocabCardContent
 from .audio import AudioRequest, AudioStorage, audio_key
 from .kindle import parse_kindle_vocab
 from .models import Entry, User
@@ -25,7 +25,7 @@ class ApprovalDeps:
     """Collaborators needed to finalize an entry into an Anki card."""
 
     storage: AudioStorage
-    anki_writer: AnkiWriter
+    anki_writer: AnkiBackend
     voice: str
 
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from .anki_writer import AnkiWriter
+from .anki_writer import AnkiBackend
 from .audio import AudioRequest, AudioStorage, TtsClient, synthesize_with_cache
 from .gemini import GeminiClient, TranslationRequest, translate_with_cache
 from .models import Entry, User
@@ -29,7 +29,7 @@ class WorkerDeps:
     gemini: GeminiClient
     tts: TtsClient
     storage: AudioStorage
-    anki_writer: AnkiWriter
+    anki_writer: AnkiBackend
     cache_session_factory: async_sessionmaker[AsyncSession]
     voice: str = "en-US-AriaNeural"
 

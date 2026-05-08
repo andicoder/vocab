@@ -23,8 +23,21 @@ class Settings(BaseSettings):
     audio_local_dir: str = "./var/audio"
     audio_public_url_base: str = ""
 
+    # File-based Anki write path (dev/tests). The pod mounts the
+    # anki-sync-data PVC and writes directly into the user's collection.
+    # Contended in production because anki-sync-server keeps the file open
+    # at the Anki Rust backend level (#5).
     anki_collection_root: str = "./var/anki"
     anki_deck_name: str = "Default"
+
+    # HTTP sync path (production). When `anki_sync_url` is set, the app
+    # opens a private "shadow" collection under `anki_shadow_root` per user
+    # and pushes notes to anki-sync-server via the official sync protocol.
+    # `anki_sync_credentials_json` is a JSON object mapping vocab username
+    # to the user's anki-sync-server password (loaded once at startup).
+    anki_sync_url: str = ""
+    anki_sync_credentials_json: str = "{}"
+    anki_shadow_root: str = "./var/anki-shadow"
 
     ui_default_locale: str = "de"
     public_base_url: str = ""
