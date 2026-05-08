@@ -44,6 +44,32 @@ alembic upgrade head
 
 Full conventions (TDD, src layout, auth boundary, migration rules) in [`CLAUDE.md`](CLAUDE.md).
 
+## Browser extension
+
+Lives in [`extension/`](extension/) as an unpacked MV3 add-on for Brave/Chrome and Firefox. It adds two right-click entries on selected text:
+
+- **vocab: Wort speichern** — POSTs the selection (plus ~80 chars of context and the page URL) to `/vocab`.
+- **vocab: Übersetzung anzeigen** — calls `/translate` and shows a floating tooltip with translation, alternatives and IPA. A `+ vocab` button on the tooltip saves the entry.
+
+Auth piggybacks on the Authentik cookie on `.example.com`; the extension itself has no login.
+
+### Install (Brave / Chrome / Edge)
+
+1. Open `chrome://extensions/` (or `brave://extensions/`).
+2. Toggle **Developer mode** on.
+3. Click **Load unpacked** and pick the `extension/` directory.
+4. Open the extension's options (puzzle-piece icon → ⋮ → *Options*) and set the API URL if it differs from `https://vocab.example.com`.
+
+### Install (Firefox)
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Click **Load Temporary Add-on…** and pick `extension/manifest.json`.
+3. The add-on stays loaded until Firefox restarts. For permanent install, sign it through `about:addons` or run a self-signed unbranded/Developer Edition build.
+
+### Verifying it works
+
+Highlight a word on any page → right-click → *vocab: Wort speichern*. A native browser notification should confirm. Try *vocab: Übersetzung anzeigen* on the same selection to see the tooltip.
+
 ## Deployment
 
 This repo only produces an image. `.github/workflows/build.yml` builds and pushes to `ghcr.io/andicoder/vocab-api` on every push to `main` (`:latest`) and on git tags `v*` (semver).
