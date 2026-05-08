@@ -12,7 +12,7 @@ from .audio import EdgeTtsClient, make_storage_from_settings
 from .config import settings
 from .db import SessionLocal
 from .gemini import GeminiClient
-from .routes import audio, translate, ui, vocab
+from .routes import audio, imports, translate, ui, vocab
 from .worker import run_worker
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -59,6 +59,7 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(vocab.router)
 app.include_router(translate.router)
 app.include_router(audio.router)
+app.include_router(imports.router)
 app.include_router(ui.router)
 
 

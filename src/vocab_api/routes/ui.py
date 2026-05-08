@@ -1,10 +1,11 @@
 import asyncio
 import re
+import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, Form, Query, Request, Response
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -23,6 +24,7 @@ from ..operations import (
     ApprovePayload,
     apply_approve,
     apply_reject,
+    import_kindle_entries,
     load_owned_entry,
 )
 from ..worker import process_entry
@@ -191,3 +193,26 @@ async def htmx_reject(
     apply_reject(entry)
     await session.commit()
     return HTMLResponse("", status_code=200)
+
+
+@router.post("/ui/import/kindle", response_class=HTMLResponse)
+async def htmx_import_kindle(
+    request: Request,
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    file: Annotated[UploadFile, File()],
+) -> Response:
+    data = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
+        tf.write(data)
+        tmp_path = Path(tf.name)
+    try:
+        added, skipped = await import_kindle_entries(session=session, user=user, db_path=tmp_path)
+        await session.commit()
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return _render(
+        request,
+        "partials/import_toast.html",
+        {"added": added, "skipped": skipped},
+    )

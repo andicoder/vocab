@@ -1,11 +1,14 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .anki_writer import AnkiWriter
 from .audio import AudioStorage, audio_key
+from .kindle import parse_kindle_vocab
 from .models import Entry, User
 
 
@@ -72,3 +75,51 @@ async def apply_approve(
 
 def apply_reject(entry: Entry) -> None:
     entry.status = "rejected"
+
+
+async def import_kindle_entries(
+    *,
+    session: AsyncSession,
+    user: User,
+    db_path: Path,
+    lang: str = "en",
+) -> tuple[int, int]:
+    entries = list(parse_kindle_vocab(db_path, lang=lang))
+
+    seen: set[str] = set()
+    unique = []
+    for entry in entries:
+        if entry.word in seen:
+            continue
+        seen.add(entry.word)
+        unique.append(entry)
+
+    if not unique:
+        return 0, 0
+
+    words = [e.word for e in unique]
+    existing = await session.execute(
+        select(Entry.word).where(
+            Entry.user_id == user.id, Entry.lang == lang, Entry.word.in_(words)
+        )
+    )
+    existing_words = {row[0] for row in existing.all()}
+
+    added = skipped = 0
+    for entry in unique:
+        if entry.word in existing_words:
+            skipped += 1
+            continue
+        session.add(
+            Entry(
+                user_id=user.id,
+                word=entry.word,
+                sentence=entry.sentence or None,
+                source=f"Kindle: {entry.source}" if entry.source else "Kindle",
+                lang=lang,
+            )
+        )
+        added += 1
+
+    await session.flush()
+    return added, skipped

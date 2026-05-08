@@ -9,10 +9,10 @@ Collect words from any source (browser right-click, mobile share, Kindle import,
 | Phase | Content | Status |
 |-------|---------|--------|
 | 2c | API skeleton: FastAPI, auth header, Postgres schema, GHA → ghcr.io | ✅ done |
-| 2d | Translator (Gemini) + audio (edge-tts) + plausibility + auto-approve | 🚧 in progress |
-| 2e | Web UI (htmx) + direct write into the Anki sync server | planned |
-| 2f | Browser extension (fork of AnkiLingoFlash) | planned |
-| 2g | Kindle importer (port from the Phase-1 script) | planned |
+| 2d | Translator (Gemini) + audio (edge-tts) + plausibility + auto-approve | ✅ done |
+| 2e | Web UI (htmx, PWA, bookmarklet) + write into the Anki sync server | ✅ done |
+| 2f | Browser extension (MV3, from-scratch) — context menu + translation popup | ✅ done |
+| 2g | Kindle importer (`vocab.db` upload, dedupe per user) | ✅ done |
 
 Plan: [`docs/PLAN.md`](docs/PLAN.md) · Conventions: [`CLAUDE.md`](CLAUDE.md)
 
@@ -69,6 +69,29 @@ Auth piggybacks on the Authentik cookie on `.example.com`; the extension itself 
 ### Verifying it works
 
 Highlight a word on any page → right-click → *vocab: Wort speichern*. A native browser notification should confirm. Try *vocab: Übersetzung anzeigen* on the same selection to see the tooltip.
+
+## Kindle import
+
+Kindle e-readers keep your vocabulary lookups in `system/vocabulary/vocab.db` (a SQLite file). vocab-api can ingest it directly: every English word with a lookup lands in your queue as `pending`, with the most recent in-context sentence and the book title as the source. Already-imported words are skipped, so re-uploads after every reading session are safe.
+
+### Get the file
+
+1. Plug your Kindle in via USB. It mounts as a regular drive.
+2. Copy `<Kindle>/system/vocabulary/vocab.db` somewhere convenient. The path is the same on PaperWhite, Oasis and base Kindles.
+
+### Upload via the UI
+
+Open `/queue`, scroll to the *Kindle import* section, pick the `vocab.db` and click **Hochladen**. The toast tells you how many words were new vs. already in your collection. New entries pick up Gemini translation + audio in the background worker (1 req/s).
+
+### Upload via the API
+
+```sh
+curl -F "file=@vocab.db" -H "X-authentik-username: $USER" \
+     https://vocab.example.com/import/kindle
+# {"added": 42, "skipped": 7}
+```
+
+In production the Authentik forward-auth header replaces the explicit `X-authentik-username` (which is dev-only).
 
 ## Deployment
 

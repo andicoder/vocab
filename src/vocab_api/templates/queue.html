@@ -11,4 +11,20 @@
 {% else %}
 <p class="empty">{{ t("page.queue.empty") }}</p>
 {% endif %}
+
+<hr style="margin:1.5rem 0;border:none;border-top:1px solid #e5e7eb">
+
+<h2 style="font-size:1rem">{{ t("page.queue.import.heading") }}</h2>
+<p class="empty" style="font-size:.85rem">{{ t("page.queue.import.help") }}</p>
+<form
+    hx-post="/ui/import/kindle"
+    hx-encoding="multipart/form-data"
+    hx-target="#import-result"
+    hx-swap="innerHTML"
+    hx-on::after-request="if (event.detail.successful) this.reset()"
+>
+    <input type="file" name="file" accept=".db,application/x-sqlite3" required>
+    <button type="submit" class="primary">{{ t("page.queue.import.submit") }}</button>
+</form>
+<div id="import-result"></div>
 {% endblock %}
