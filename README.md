@@ -4,17 +4,9 @@ Self-hosted vocab + translator + Anki-card-builder service for the family.
 
 Collect words from any source (browser right-click, mobile share, Kindle import, manual) → translate with **Gemini Flash-Lite** (lemma, translation, alternatives, IPA, plausibility check) → generate audio via **edge-tts** → write finished cards directly into our own **Anki sync server** → all Anki devices pick them up on the next normal sync.
 
-## Status
+[![CI](https://github.com/andicoder/vocab/actions/workflows/build.yml/badge.svg)](https://github.com/andicoder/vocab/actions/workflows/build.yml)
 
-| Phase | Content | Status |
-|-------|---------|--------|
-| 2c | API skeleton: FastAPI, auth header, Postgres schema, GHA → ghcr.io | ✅ done |
-| 2d | Translator (Gemini) + audio (edge-tts) + plausibility + auto-approve | ✅ done |
-| 2e | Web UI (htmx, PWA, bookmarklet) + write into the Anki sync server | ✅ done |
-| 2f | Browser extension (MV3, from-scratch) — context menu + translation popup | ✅ done |
-| 2g | Kindle importer (`vocab.db` upload, dedupe per user) | ✅ done |
-
-Plan: [`docs/PLAN.md`](docs/PLAN.md) · Conventions: [`CLAUDE.md`](CLAUDE.md)
+Architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · Conventions: [`CLAUDE.md`](CLAUDE.md)
 
 ## Stack
 

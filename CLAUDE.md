@@ -59,5 +59,4 @@ The deploy pipeline lives in a separate (private) infrastructure repo and consum
 
 ## Out of scope (for now)
 
-- Translation, audio TTS, Anki-write, Web-UI, Browser-Extension, Kindle import — these land in later phases.
 - Multi-language support beyond English source / German target. Schema is open for it but the code paths assume `en→de`.
