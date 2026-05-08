@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ t("page.bookmarklet.title") }}{% endblock %}
+{% block content %}
+<h1>{{ t("page.bookmarklet.heading") }}</h1>
+<p>{{ t("page.bookmarklet.description") }}</p>
+<p>
+    <a class="bookmarklet" href="javascript:{{ bookmarklet_js }}">
+        ➕ {{ t("page.bookmarklet.link_label") }}
+    </a>
+</p>
+<p class="empty">{{ t("page.bookmarklet.instructions") }}</p>
+{% endblock %}

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     anki_deck_name: str = "Default"
 
     ui_default_locale: str = "de"
+    public_base_url: str = ""
 
 
 settings = Settings()

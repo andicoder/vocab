@@ -37,7 +37,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-vocab_api = ["templates/**/*.html", "locales/*.json"]
+vocab_api = ["templates/**/*.html", "locales/*.json", "static/*"]
 
 [tool.ruff]
 line-length = 100

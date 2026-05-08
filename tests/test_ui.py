@@ -122,3 +122,65 @@ def test_htmx_reject_clears_row(http_client: TestClient):
     listing = http_client.get("/vocab?status=rejected", headers=_alice())
     assert listing.status_code == 200
     assert any(e["id"] == entry_id for e in listing.json())
+
+
+def test_index_page_prefills_query_params(http_client: TestClient):
+    response = http_client.get(
+        "/?word=expedition&sentence=A+grand+expedition&source=https%3A%2F%2Fexample.com",
+        headers=_alice(),
+    )
+    assert response.status_code == 200
+    assert 'value="expedition"' in response.text
+    assert 'value="A grand expedition"' in response.text
+    assert 'value="https://example.com"' in response.text
+
+
+def test_static_files_served(http_client: TestClient):
+    manifest = http_client.get("/static/manifest.webmanifest")
+    assert manifest.status_code == 200
+    assert manifest.json()["start_url"] == "/"
+    assert manifest.json()["display"] == "standalone"
+
+    sw = http_client.get("/static/sw.js")
+    assert sw.status_code == 200
+    assert "serviceWorker" not in sw.text  # SW source itself, not registration
+    assert "caches" in sw.text
+
+    icon = http_client.get("/static/icon.svg")
+    assert icon.status_code == 200
+    assert "image/svg" in icon.headers["content-type"]
+
+
+def test_base_template_links_manifest_and_registers_sw(http_client: TestClient):
+    response = http_client.get("/", headers=_alice())
+    assert response.status_code == 200
+    assert '<link rel="manifest" href="/static/manifest.webmanifest">' in response.text
+    assert 'navigator.serviceWorker.register("/static/sw.js")' in response.text
+    assert '<meta name="theme-color"' in response.text
+
+
+def test_bookmarklet_page_requires_auth(http_client: TestClient):
+    assert http_client.get("/bookmarklet").status_code == 401
+
+
+def test_bookmarklet_page_renders_javascript_link(http_client: TestClient):
+    response = http_client.get(
+        "/bookmarklet",
+        headers={**_alice(), "Host": "vocab.example.com"},
+    )
+    assert response.status_code == 200
+    assert 'href="javascript:' in response.text
+    assert "window.open(" in response.text
+    assert "URLSearchParams" in response.text
+    assert "Bookmarklet" in response.text  # heading visible
+
+
+def test_bookmarklet_uses_public_base_url_when_set(
+    http_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    from vocab_api.config import settings
+
+    monkeypatch.setattr(settings, "public_base_url", "https://vocab.example.com")
+    response = http_client.get("/bookmarklet", headers=_alice())
+    assert response.status_code == 200
+    assert "https://vocab.example.com/?" in response.text

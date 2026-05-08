@@ -3,6 +3,10 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+    <link rel="apple-touch-icon" href="/static/icon.svg">
     <title>{% block title %}vocab{% endblock %}</title>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <style>
@@ -40,7 +44,15 @@
     <nav>
         <a href="/" class="{% if active == 'add' %}active{% endif %}">{{ t("nav.add") }}</a>
         <a href="/queue" class="{% if active == 'queue' %}active{% endif %}">{{ t("nav.queue") }}</a>
+        <a href="/bookmarklet" class="{% if active == 'bookmarklet' %}active{% endif %}">{{ t("nav.bookmarklet") }}</a>
     </nav>
     {% block content %}{% endblock %}
+    <script>
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("/static/sw.js").catch(function (e) {
+                console.warn("sw register failed", e);
+            });
+        }
+    </script>
 </body>
 </html>

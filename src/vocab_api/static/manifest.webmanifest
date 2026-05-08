@@ -1,0 +1,19 @@
+{
+  "name": "vocab",
+  "short_name": "vocab",
+  "description": "Self-hosted vocab + translator + Anki-card builder",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

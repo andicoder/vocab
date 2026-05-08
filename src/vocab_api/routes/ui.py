@@ -1,9 +1,10 @@
 import asyncio
+import re
 from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, Form, Request, Response
+from fastapi import APIRouter, Depends, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -27,9 +28,20 @@ from ..operations import (
 from ..worker import process_entry
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+_BOOKMARKLET_JS_PATH = Path(__file__).resolve().parent.parent / "static" / "bookmarklet.js"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 router = APIRouter(tags=["ui"])
+
+
+def _build_bookmarklet_js(base_url: str) -> str:
+    source = _BOOKMARKLET_JS_PATH.read_text(encoding="utf-8")
+    source = source.replace("__BASE_URL__", base_url.rstrip("/"))
+    # Only strip line comments that start at the beginning of a line (optionally
+    # indented) so we don't eat the "//" inside URL string literals.
+    source = re.sub(r"^\s*//[^\n]*\n", "\n", source, flags=re.MULTILINE)
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    return re.sub(r"\s+", " ", source).strip()
 
 
 def _render(
@@ -48,8 +60,39 @@ def _render(
 async def index_page(
     request: Request,
     user: Annotated[User, Depends(current_user)],
+    word: Annotated[str | None, Query()] = None,
+    sentence: Annotated[str | None, Query()] = None,
+    source: Annotated[str | None, Query()] = None,
 ) -> Response:
-    return _render(request, "index.html", {"active": "add"})
+    return _render(
+        request,
+        "index.html",
+        {
+            "active": "add",
+            "prefill": {
+                "word": word or "",
+                "sentence": sentence or "",
+                "source": source or "",
+            },
+        },
+    )
+
+
+@router.get("/bookmarklet", response_class=HTMLResponse)
+async def bookmarklet_page(
+    request: Request,
+    user: Annotated[User, Depends(current_user)],
+) -> Response:
+    base_url = settings.public_base_url or str(request.base_url).rstrip("/")
+    return _render(
+        request,
+        "bookmarklet.html",
+        {
+            "active": "bookmarklet",
+            "base_url": base_url,
+            "bookmarklet_js": _build_bookmarklet_js(base_url),
+        },
+    )
 
 
 @router.get("/queue", response_class=HTMLResponse)

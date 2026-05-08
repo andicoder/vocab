@@ -4,6 +4,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .anki_writer import AnkiWriter
@@ -13,6 +14,8 @@ from .db import SessionLocal
 from .gemini import GeminiClient
 from .routes import audio, translate, ui, vocab
 from .worker import run_worker
+
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
@@ -52,6 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="vocab-api", version=__version__, lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(vocab.router)
 app.include_router(translate.router)
 app.include_router(audio.router)
