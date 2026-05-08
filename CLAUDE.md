@@ -38,6 +38,13 @@ alembic revision -m "what changed"          # write migration by hand (autogener
 alembic upgrade head
 ```
 
+## Issue / PR workflow
+
+- One issue → one branch → one PR. Do not bundle multiple GitHub issues into one branch, even when the diffs would be small. Each PR references the issue it closes in the body (`Fixes #N`).
+- Branch names: `fix/<slug>`, `feat/<slug>`, `chore/<slug>`. Slug is short, kebab-case, and reflects the change, not the ticket number.
+- The test that proves the fix and the fix itself land in the same PR (TDD: red → green in the same branch, not split across PRs).
+- Branch from `main`. Do not chain issue branches; rebase on `main` if it moves while the PR is open.
+
 ## Conventions specific to this codebase
 
 - **Auth boundary.** `auth.py::current_user` is the single trust point for `X-authentik-username`. Inside the app, pass `User` objects, never the raw header. The header arrives via Authentik forward-auth — production-only — so the test client sets it explicitly.
