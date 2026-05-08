@@ -26,5 +26,7 @@ class Settings(BaseSettings):
     anki_collection_root: str = "./var/anki"
     anki_deck_name: str = "Default"
 
+    ui_default_locale: str = "de"
+
 
 settings = Settings()

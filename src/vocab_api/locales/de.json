@@ -1,0 +1,21 @@
+{
+  "nav.add": "Hinzufügen",
+  "nav.queue": "Warteschlange",
+  "page.add.title": "Hinzufügen — vocab",
+  "page.add.heading": "Neues Wort",
+  "form.word.placeholder": "Wort",
+  "form.sentence.placeholder": "Satz (optional)",
+  "form.source.placeholder": "Quelle (optional)",
+  "form.add.submit": "Hinzufügen",
+  "page.queue.title": "Warteschlange — vocab",
+  "page.queue.heading": "Review-Warteschlange",
+  "page.queue.empty": "Keine Einträge zur Review.",
+  "field.lemma": "Lemma",
+  "field.translation": "Übersetzung",
+  "field.alternatives": "Alternativen",
+  "field.ipa": "IPA",
+  "action.approve": "Übernehmen",
+  "action.reject": "Verwerfen",
+  "action.reject.confirm": "Diesen Eintrag verwerfen?",
+  "toast.added": "{word} hinzugefügt — Status: {status}"
+}

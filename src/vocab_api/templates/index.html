@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ t("page.add.title") }}{% endblock %}
+{% block content %}
+<h1>{{ t("page.add.heading") }}</h1>
+<form
+    hx-post="/ui/vocab"
+    hx-target="#result"
+    hx-swap="afterbegin"
+    hx-on::after-request="if (event.detail.successful) this.reset()"
+>
+    <input type="text" name="word" placeholder="{{ t('form.word.placeholder') }}" autofocus required>
+    <input type="text" name="sentence" placeholder="{{ t('form.sentence.placeholder') }}">
+    <input type="text" name="source" placeholder="{{ t('form.source.placeholder') }}">
+    <button type="submit" class="primary">{{ t("form.add.submit") }}</button>
+</form>
+<div id="result"></div>
+{% endblock %}

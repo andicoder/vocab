@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ t("page.queue.title") }}{% endblock %}
+{% block content %}
+<h1>{{ t("page.queue.heading") }}</h1>
+{% if entries %}
+<div id="queue">
+    {% for entry in entries %}
+        {% include "partials/queue_item.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty">{{ t("page.queue.empty") }}</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,21 @@
+{
+  "nav.add": "Add",
+  "nav.queue": "Queue",
+  "page.add.title": "Add — vocab",
+  "page.add.heading": "Add a word",
+  "form.word.placeholder": "word",
+  "form.sentence.placeholder": "sentence (optional)",
+  "form.source.placeholder": "source (optional)",
+  "form.add.submit": "Add",
+  "page.queue.title": "Queue — vocab",
+  "page.queue.heading": "Review queue",
+  "page.queue.empty": "No entries to review.",
+  "field.lemma": "Lemma",
+  "field.translation": "Translation",
+  "field.alternatives": "Alternatives",
+  "field.ipa": "IPA",
+  "action.approve": "Approve",
+  "action.reject": "Reject",
+  "action.reject.confirm": "Reject this entry?",
+  "toast.added": "{word} added — status: {status}"
+}

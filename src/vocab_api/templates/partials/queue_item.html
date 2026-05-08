@@ -1,0 +1,30 @@
+<div class="entry" id="entry-{{ entry.id }}">
+    <h3>{{ entry.word }}</h3>
+    {% if entry.sentence %}<p class="sentence">{{ entry.sentence }}</p>{% endif %}
+    <form id="form-{{ entry.id }}" class="grid">
+        <label for="lemma-{{ entry.id }}">{{ t("field.lemma") }}</label>
+        <input id="lemma-{{ entry.id }}" type="text" name="lemma" value="{{ entry.lemma or '' }}">
+        <label for="translation-{{ entry.id }}">{{ t("field.translation") }}</label>
+        <input id="translation-{{ entry.id }}" type="text" name="translation" value="{{ entry.translation or '' }}">
+        <label for="alternatives-{{ entry.id }}">{{ t("field.alternatives") }}</label>
+        <input id="alternatives-{{ entry.id }}" type="text" name="alternatives" value="{{ entry.alternatives or '' }}">
+        <label for="ipa-{{ entry.id }}">{{ t("field.ipa") }}</label>
+        <input id="ipa-{{ entry.id }}" type="text" name="ipa" value="{{ entry.ipa or '' }}">
+    </form>
+    <div class="actions">
+        <button
+            class="primary"
+            hx-post="/ui/vocab/{{ entry.id }}/approve"
+            hx-include="#form-{{ entry.id }}"
+            hx-target="#entry-{{ entry.id }}"
+            hx-swap="outerHTML"
+        >{{ t("action.approve") }}</button>
+        <button
+            class="danger"
+            hx-post="/ui/vocab/{{ entry.id }}/reject"
+            hx-target="#entry-{{ entry.id }}"
+            hx-swap="outerHTML"
+            hx-confirm="{{ t('action.reject.confirm') }}"
+        >{{ t("action.reject") }}</button>
+    </div>
+</div>

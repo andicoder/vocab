@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="{{ locale }}">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}vocab{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 640px; margin: 0 auto; padding: 1rem; }
+        nav { margin-bottom: 1.25rem; }
+        nav a { margin-right: 1rem; text-decoration: none; }
+        nav a.active { font-weight: 600; }
+        h1 { margin-top: 0; }
+        form input[type=text], form textarea {
+            width: 100%; padding: .5rem; font-size: 1rem; box-sizing: border-box;
+            margin-bottom: .5rem; border: 1px solid #ccc; border-radius: 4px;
+        }
+        button { padding: .5rem 1rem; font-size: 1rem; cursor: pointer; border-radius: 4px; }
+        button.primary { background: #2563eb; color: white; border: 1px solid #2563eb; }
+        button.danger { background: white; color: #b91c1c; border: 1px solid #b91c1c; }
+        .entry {
+            border: 1px solid #e5e7eb; border-radius: 6px; padding: .75rem; margin: .75rem 0;
+            background: #fafafa;
+        }
+        .entry h3 { margin: 0 0 .5rem; }
+        .entry .sentence { color: #525252; font-style: italic; margin: 0 0 .5rem; }
+        .entry .grid { display: grid; grid-template-columns: 6rem 1fr; gap: .25rem .5rem; align-items: center; }
+        .entry .grid label { font-size: .85rem; color: #525252; }
+        .entry .grid input { padding: .25rem; font-size: .9rem; }
+        .entry .actions { margin-top: .5rem; display: flex; gap: .5rem; }
+        .toast {
+            background: #ecfdf5; color: #065f46; padding: .5rem .75rem; border-radius: 4px;
+            margin: .5rem 0; border: 1px solid #a7f3d0;
+        }
+        .toast.error { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+        .empty { color: #6b7280; font-style: italic; }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="/" class="{% if active == 'add' %}active{% endif %}">{{ t("nav.add") }}</a>
+        <a href="/queue" class="{% if active == 'queue' %}active{% endif %}">{{ t("nav.queue") }}</a>
+    </nav>
+    {% block content %}{% endblock %}
+</body>
+</html>
