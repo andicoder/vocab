@@ -40,13 +40,29 @@ async def process_entry(
     entry: Entry,
     user: User,
     deps: WorkerDeps,
-) -> None:
+) -> str | None:
+    """Translates and (if plausible) writes `entry` to Anki.
+
+    Returns the existing lemma if `entry` was a duplicate of another entry's
+    lemma — in that case the entry is deleted from the session and no further
+    work happens. Caller may use the return value for user feedback."""
     translation = await translate_with_cache(
         session=session,
         cache_session_factory=deps.cache_session_factory,
         gemini=deps.gemini,
         request=TranslationRequest(word=entry.word, sentence=entry.sentence, lang=entry.lang),
     )
+
+    # Kindle imports often produce two surface forms of one lemma (e.g.
+    # "dozens" + "dozen"). Drop the second one before it hits
+    # uq_entry_user_lemma_lang at commit time and triggers an infinite
+    # worker retry (#10).
+    if await _lemma_already_exists(
+        session, user_id=user.id, lemma=translation.lemma, lang=entry.lang, exclude_id=entry.id
+    ):
+        await session.delete(entry)
+        return translation.lemma
+
     verdict = await deps.gemini.plausibility(
         word=entry.word, sentence=entry.sentence, translation=translation
     )
@@ -72,6 +88,28 @@ async def process_entry(
         )
     else:
         entry.status = "needs-review"
+    return None
+
+
+async def _lemma_already_exists(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    lemma: str,
+    lang: str,
+    exclude_id: int,
+) -> bool:
+    stmt = (
+        select(Entry.id)
+        .where(
+            Entry.user_id == user_id,
+            Entry.lemma == lemma,
+            Entry.lang == lang,
+            Entry.id != exclude_id,
+        )
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
 async def _claim_one_pending(session: AsyncSession) -> Entry | None:

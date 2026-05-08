@@ -27,5 +27,6 @@
   "action.approve": "Approve",
   "action.reject": "Reject",
   "action.reject.confirm": "Reject this entry?",
-  "toast.added": "{word} added — status: {status}"
+  "toast.added": "{word} added — status: {status}",
+  "toast.exists": "\"{word}\" — already in your collection as \"{lemma}\", nothing added."
 }

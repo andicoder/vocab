@@ -142,6 +142,7 @@ async def htmx_create_entry(
     session.add(entry)
     await session.flush()
 
+    duplicate_of: str | None = None
     if settings.gemini_api_key:
         deps = WorkerDeps(
             gemini=gemini,
@@ -153,11 +154,21 @@ async def htmx_create_entry(
         )
         try:
             async with asyncio.timeout(settings.gemini_timeout_s):
-                await process_entry(session=session, entry=entry, user=user, deps=deps)
+                duplicate_of = await process_entry(
+                    session=session, entry=entry, user=user, deps=deps
+                )
         except (TimeoutError, httpx.HTTPError):
             pass
 
     await session.commit()
+
+    if duplicate_of is not None:
+        return _render(
+            request,
+            "partials/exists_toast.html",
+            {"word": word, "lemma": duplicate_of},
+        )
+
     await session.refresh(entry)
     return _render(request, "partials/added_toast.html", {"entry": entry})
 
