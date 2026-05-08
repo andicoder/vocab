@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>vocab — Optionen</title>
+    <style>
+        body { font-family: system-ui, sans-serif; padding: 1rem; min-width: 320px; }
+        label { display: block; margin: .25rem 0; font-size: .9rem; }
+        input { width: 100%; padding: .5rem; box-sizing: border-box;
+                font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; }
+        button { margin-top: .75rem; padding: .5rem 1rem; cursor: pointer;
+                 background: #2563eb; color: white; border: 0; border-radius: 4px; }
+        .status { margin-top: .5rem; font-size: .85rem; color: #065f46; }
+    </style>
+</head>
+<body>
+    <label for="apiBaseUrl">API-URL</label>
+    <input id="apiBaseUrl" type="url" placeholder="https://vocab.example.com">
+    <button id="save" type="button">Speichern</button>
+    <div id="status" class="status"></div>
+    <script src="options.js"></script>
+</body>
+</html>

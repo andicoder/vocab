@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "vocab",
+  "version": "0.1.0",
+  "description": "Send selected words to vocab-api with one click.",
+  "permissions": ["contextMenus", "storage", "notifications", "scripting", "activeTab"],
+  "host_permissions": ["https://vocab.example.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "icons": {
+    "128": "icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "vocab@andicoder.de",
+      "strict_min_version": "121.0"
+    }
+  }
+}
