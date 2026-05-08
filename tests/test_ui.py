@@ -63,6 +63,34 @@ def test_htmx_create_entry_returns_toast(http_client: TestClient):
     assert "hinzugefügt" in response.text
 
 
+def test_htmx_create_entry_renders_exists_toast_when_lemma_already_present(
+    http_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    # Regression for #10: when process_entry deletes the new row as a
+    # duplicate of an existing lemma, the UI must render the "already exists"
+    # toast instead of session.refresh()ing a deleted entry.
+    from vocab_api.config import settings
+    from vocab_api.routes import ui
+
+    monkeypatch.setattr(settings, "gemini_api_key", "fake-key")
+
+    async def fake_process_entry(*, session, entry, user, deps):
+        await session.delete(entry)
+        return "dozen"
+
+    monkeypatch.setattr(ui, "process_entry", fake_process_entry)
+
+    response = http_client.post(
+        "/ui/vocab",
+        data={"word": "dozens", "sentence": "Dozens of pebbles."},
+        headers=_alice(),
+    )
+    assert response.status_code == 200
+    assert "dozens" in response.text
+    assert "dozen" in response.text
+    assert "schon" in response.text  # de: "schon als ... in der Sammlung"
+
+
 def test_queue_page_lists_needs_review_entries(http_client: TestClient):
     create = http_client.post("/vocab", json={"word": "expedition"}, headers=_alice())
     assert create.status_code == 201

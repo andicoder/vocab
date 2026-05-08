@@ -30,6 +30,21 @@ def _make_handler(translate_payload: dict, verdict: str):
     return handler
 
 
+def _make_translate_only_handler(translate_payload: dict):
+    # Asserts plausibility is never called — used to prove the duplicate path
+    # short-circuits before the (uncached, expensive) plausibility request.
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        is_translate = (
+            body.get("generationConfig", {}).get("responseMimeType") == "application/json"
+        )
+        if not is_translate:
+            raise AssertionError("plausibility must not run for duplicates")
+        return httpx.Response(200, json=_gemini_response(json.dumps(translate_payload)))
+
+    return handler
+
+
 def _gemini_client(handler) -> tuple[GeminiClient, httpx.AsyncClient]:
     transport = httpx.MockTransport(handler)
     http = httpx.AsyncClient(transport=transport)
@@ -247,6 +262,111 @@ class _RaisingAnkiWriter:
     async def write_card(self, **kwargs: object) -> int:
         self.calls += 1
         raise RuntimeError("Anki already open, or media currently syncing")
+
+
+async def test_process_entry_deletes_entry_when_user_has_existing_lemma(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # Regression for #10: Kindle imports often produce two surface forms for one
+    # lemma (e.g. "dozens" and "dozen"). The second one must be dropped instead
+    # of hitting uq_entry_user_lemma_lang and leaving the entry pending forever.
+    user = User(username="alice")
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(
+        Entry(
+            user_id=user.id,
+            word="dozen",
+            lemma="dozen",
+            translation="das Dutzend",
+            status="synced",
+            lang="en",
+        )
+    )
+    pending = Entry(
+        user_id=user.id,
+        word="dozens",
+        sentence="Dozens of pebbles littered the path.",
+        lang="en",
+    )
+    db_session.add(pending)
+    await db_session.flush()
+    pending_id = pending.id
+
+    translate_payload = {
+        "lemma": "dozen",
+        "translation": "das Dutzend",
+        "alternatives": "",
+        "ipa": "/ˈdʌzən/",
+    }
+    gemini, http = _gemini_client(_make_translate_only_handler(translate_payload))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        result = await process_entry(
+            session=db_session,
+            entry=pending,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert result == "dozen"
+    await db_session.flush()
+    assert await db_session.get(Entry, pending_id) is None
+    surviving_count = await db_session.scalar(select(func.count()).select_from(Entry))
+    assert surviving_count == 1
+    assert tts.calls == []
+    assert not (tmp_path / "alice" / "collection.anki2").exists()
+
+
+async def test_process_entry_allows_same_lemma_for_different_users(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # Duplicate detection is per-user — Alice and Bob can each have "expedition".
+    alice = User(username="alice")
+    bob = User(username="bob")
+    db_session.add_all([alice, bob])
+    await db_session.flush()
+
+    db_session.add(
+        Entry(
+            user_id=alice.id,
+            word="expedition",
+            lemma="expedition",
+            translation="die Expedition",
+            status="synced",
+            lang="en",
+        )
+    )
+    bob_entry = Entry(
+        user_id=bob.id,
+        word="expedition",
+        sentence="A grand expedition north.",
+        lang="en",
+    )
+    db_session.add(bob_entry)
+    await db_session.flush()
+
+    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=bob_entry,
+            user=bob,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert bob_entry.status == "synced"
+    assert bob_entry.lemma == "expedition"
 
 
 async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_path: Path):

@@ -27,5 +27,6 @@
   "action.approve": "Übernehmen",
   "action.reject": "Verwerfen",
   "action.reject.confirm": "Diesen Eintrag verwerfen?",
-  "toast.added": "{word} hinzugefügt — Status: {status}"
+  "toast.added": "{word} hinzugefügt — Status: {status}",
+  "toast.exists": "„{word}“ — schon als „{lemma}“ in der Sammlung, nichts hinzugefügt."
 }
