@@ -3,12 +3,14 @@ from pathlib import Path
 
 import httpx
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vocab_api.anki_writer import AnkiWriter
 from vocab_api.audio import audio_key
+from vocab_api.db import SessionLocal
 from vocab_api.gemini import GeminiClient
-from vocab_api.models import Entry, User
+from vocab_api.models import AudioCache, Entry, TranslationCache, User
 from vocab_api.worker import process_entry
 
 
@@ -107,6 +109,7 @@ async def test_process_entry_yes_writes_anki_and_marks_synced(
             tts=tts,
             storage=storage,
             anki_writer=anki_writer,
+            cache_session_factory=SessionLocal,
         )
     finally:
         await http.aclose()
@@ -153,6 +156,7 @@ async def test_process_entry_unclear_needs_review(db_session: AsyncSession, tmp_
             tts=tts,
             storage=storage,
             anki_writer=anki_writer,
+            cache_session_factory=SessionLocal,
         )
     finally:
         await http.aclose()
@@ -180,6 +184,7 @@ async def test_process_entry_no_needs_review(db_session: AsyncSession, tmp_path:
             tts=tts,
             storage=storage,
             anki_writer=anki_writer,
+            cache_session_factory=SessionLocal,
         )
     finally:
         await http.aclose()
@@ -205,6 +210,7 @@ async def test_process_entry_uses_lemma_for_audio(db_session: AsyncSession, tmp_
             tts=tts,
             storage=storage,
             anki_writer=anki_writer,
+            cache_session_factory=SessionLocal,
         )
     finally:
         await http.aclose()
@@ -233,9 +239,50 @@ async def test_process_entry_propagates_translation_error(db_session: AsyncSessi
                 tts=tts,
                 storage=storage,
                 anki_writer=anki_writer,
+                cache_session_factory=SessionLocal,
             )
     finally:
         await http.aclose()
 
     assert entry.status == "pending"
     assert entry.translation is None
+
+
+class _RaisingAnkiWriter:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def write_card(self, **kwargs: object) -> int:
+        self.calls += 1
+        raise RuntimeError("Anki already open, or media currently syncing")
+
+
+async def test_caches_survive_anki_write_failure(db_session: AsyncSession):
+    user, entry = await _make_pending_entry(db_session)
+    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+    raising_anki = _RaisingAnkiWriter()
+
+    try:
+        with pytest.raises(RuntimeError, match="Anki already open"):
+            await process_entry(
+                session=db_session,
+                entry=entry,
+                user=user,
+                gemini=gemini,
+                tts=tts,
+                storage=storage,
+                anki_writer=raising_anki,  # type: ignore[arg-type]
+                cache_session_factory=SessionLocal,
+            )
+    finally:
+        await http.aclose()
+
+    assert raising_anki.calls == 1
+
+    async with SessionLocal() as fresh:
+        translation_count = await fresh.scalar(select(func.count()).select_from(TranslationCache))
+        audio_count = await fresh.scalar(select(func.count()).select_from(AudioCache))
+        assert translation_count == 1
+        assert audio_count == 1

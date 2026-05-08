@@ -25,10 +25,12 @@ async def process_entry(
     tts: TtsClient,
     storage: AudioStorage,
     anki_writer: AnkiWriter,
+    cache_session_factory: async_sessionmaker[AsyncSession],
     voice: str = "en-US-AriaNeural",
 ) -> None:
     translation = await translate_with_cache(
         session=session,
+        cache_session_factory=cache_session_factory,
         gemini=gemini,
         word=entry.word,
         sentence=entry.sentence,
@@ -39,6 +41,7 @@ async def process_entry(
     )
     audio_url = await synthesize_with_cache(
         session=session,
+        cache_session_factory=cache_session_factory,
         tts=tts,
         storage=storage,
         word=translation.lemma,
@@ -163,6 +166,7 @@ async def _process_one(
             tts=tts,
             storage=storage,
             anki_writer=anki_writer,
+            cache_session_factory=session_factory,
             voice=voice,
         )
     return True

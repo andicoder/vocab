@@ -4,6 +4,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from vocab_api.db import SessionLocal
 from vocab_api.gemini import GeminiClient, TranslationResult, translate_with_cache
 from vocab_api.models import TranslationCache
 
@@ -49,6 +50,7 @@ async def test_cache_miss_calls_gemini_and_stores(db_session: AsyncSession):
     try:
         result = await translate_with_cache(
             session=db_session,
+            cache_session_factory=SessionLocal,
             gemini=gemini,
             word="expedition",
             sentence="A grand expedition north.",
@@ -83,12 +85,14 @@ async def test_cache_hit_skips_gemini(db_session: AsyncSession):
     try:
         await translate_with_cache(
             session=db_session,
+            cache_session_factory=SessionLocal,
             gemini=gemini,
             word="expedition",
             sentence="A grand expedition north.",
         )
         result = await translate_with_cache(
             session=db_session,
+            cache_session_factory=SessionLocal,
             gemini=gemini,
             word="expedition",
             sentence="A grand expedition north.",
@@ -110,12 +114,14 @@ async def test_cache_distinguishes_by_sentence(db_session: AsyncSession):
     try:
         first = await translate_with_cache(
             session=db_session,
+            cache_session_factory=SessionLocal,
             gemini=gemini,
             word="bank",
             sentence="I deposited money at the bank.",
         )
         second = await translate_with_cache(
             session=db_session,
+            cache_session_factory=SessionLocal,
             gemini=gemini,
             word="bank",
             sentence="We sat on the river bank.",
@@ -141,10 +147,18 @@ async def test_cache_with_no_sentence_uses_null_hash(db_session: AsyncSession):
     gemini, http = _client(handler)
     try:
         await translate_with_cache(
-            session=db_session, gemini=gemini, word="expedition", sentence=None
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            word="expedition",
+            sentence=None,
         )
         await translate_with_cache(
-            session=db_session, gemini=gemini, word="expedition", sentence=None
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            word="expedition",
+            sentence=None,
         )
     finally:
         await http.aclose()
