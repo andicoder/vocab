@@ -36,6 +36,10 @@ class LocalDirAudioStorage:
         self._root = root
         self._public_url_base = public_url_base.rstrip("/")
 
+    @property
+    def root(self) -> Path:
+        return self._root
+
     async def put(self, *, key: str, data: bytes, content_type: str) -> None:
         await asyncio.to_thread(self._write, key, data)
 
@@ -99,7 +103,7 @@ def make_storage_from_settings() -> AudioStorage:
     )
 
 
-def _audio_key(word: str, voice: str, lang: str) -> str:
+def audio_key(word: str, voice: str, lang: str) -> str:
     h = hashlib.sha256(f"{word}|{voice}|{lang}".encode()).hexdigest()[:16]
     return f"{h}.mp3"
 
@@ -123,7 +127,7 @@ async def synthesize_with_cache(
         return storage.public_url(cached.s3_key)
 
     data = await tts.synthesize(text=word, voice=voice)
-    key = _audio_key(word, voice, lang)
+    key = audio_key(word, voice, lang)
     await storage.put(key=key, data=data, content_type="audio/mpeg")
     session.add(AudioCache(word=word, voice=voice, lang=lang, s3_key=key))
     await session.flush()

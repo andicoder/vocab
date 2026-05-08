@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vocab_api.audio import (
     LocalDirAudioStorage,
-    _audio_key,
+    audio_key,
     synthesize_with_cache,
 )
 from vocab_api.models import AudioCache
@@ -32,11 +32,11 @@ class _FakeStorage:
         return f"https://cdn.example.com/{key}"
 
 
-def test_audio_key_is_stable_and_distinguishes_inputs():
-    a = _audio_key("expedition", "en-US-AriaNeural", "en")
-    b = _audio_key("expedition", "en-US-AriaNeural", "en")
-    c = _audio_key("expedition", "en-US-GuyNeural", "en")
-    d = _audio_key("expedition", "en-US-AriaNeural", "de")
+def testaudio_key_is_stable_and_distinguishes_inputs():
+    a = audio_key("expedition", "en-US-AriaNeural", "en")
+    b = audio_key("expedition", "en-US-AriaNeural", "en")
+    c = audio_key("expedition", "en-US-GuyNeural", "en")
+    d = audio_key("expedition", "en-US-AriaNeural", "de")
 
     assert a == b
     assert a != c
@@ -95,7 +95,7 @@ async def test_synthesize_with_cache_hit_skips_tts_and_storage(db_session: Async
 
     assert tts2.calls == []
     assert storage2.objects == {}
-    expected_key = _audio_key("expedition", "en-US-AriaNeural", "en")
+    expected_key = audio_key("expedition", "en-US-AriaNeural", "en")
     assert url == f"https://cdn.example.com/{expected_key}"
 
 

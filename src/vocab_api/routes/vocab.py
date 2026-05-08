@@ -1,13 +1,20 @@
+import asyncio
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..audio import AudioStorage, TtsClient
 from ..auth import current_user
+from ..config import settings
 from ..db import get_session
+from ..deps import get_gemini, get_storage, get_tts
+from ..gemini import GeminiClient
 from ..models import Entry, User
 from ..schemas import EntryCreate, EntryRead
+from ..worker import process_entry
 
 router = APIRouter(prefix="/vocab", tags=["vocab"])
 
@@ -17,6 +24,9 @@ async def create_entry(
     payload: EntryCreate,
     user: Annotated[User, Depends(current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    gemini: Annotated[GeminiClient, Depends(get_gemini)],
+    tts: Annotated[TtsClient, Depends(get_tts)],
+    storage: Annotated[AudioStorage, Depends(get_storage)],
 ) -> Entry:
     entry = Entry(
         user_id=user.id,
@@ -26,6 +36,22 @@ async def create_entry(
         lang=payload.lang,
     )
     session.add(entry)
+    await session.flush()
+
+    if settings.gemini_api_key:
+        try:
+            async with asyncio.timeout(settings.gemini_timeout_s):
+                await process_entry(
+                    session=session,
+                    entry=entry,
+                    gemini=gemini,
+                    tts=tts,
+                    storage=storage,
+                    voice=settings.audio_voice,
+                )
+        except (TimeoutError, httpx.HTTPError):
+            pass
+
     await session.commit()
     await session.refresh(entry)
     return entry
