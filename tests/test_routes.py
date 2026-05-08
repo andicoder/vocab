@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from vocab_api.anki_writer import AnkiWriter
-from vocab_api.audio import LocalDirAudioStorage, audio_key
+from vocab_api.audio import AudioRequest, LocalDirAudioStorage, audio_key
 from vocab_api.deps import get_anki_writer, get_gemini, get_storage, get_tts
 from vocab_api.gemini import GeminiClient
 from vocab_api.main import app
@@ -92,7 +92,7 @@ def test_audio_route_local_returns_file(http_client: TestClient, tmp_path: Path)
     assert response.headers["content-type"] == "audio/mpeg"
     assert response.content == b"FAKE-MP3:expedition"
 
-    expected_key = audio_key("expedition", "en-US-AriaNeural", "en")
+    expected_key = audio_key(AudioRequest(word="expedition"))
     assert (tmp_path / expected_key).exists()
 
 
@@ -127,7 +127,7 @@ def test_audio_route_remote_streams_bytes_instead_of_redirecting(http_client: Te
     assert response.status_code == 200, response.text
     assert response.headers["content-type"] == "audio/mpeg"
     assert response.content == b"FAKE-MP3:expedition"
-    expected_key = audio_key("expedition", "en-US-AriaNeural", "en")
+    expected_key = audio_key(AudioRequest(word="expedition"))
     assert storage.fetched == [expected_key]
 
 

@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..audio import (
+    AudioRequest,
     AudioStorage,
     LocalDirAudioStorage,
     TtsClient,
@@ -29,21 +30,20 @@ async def live_audio(
     storage: Annotated[AudioStorage, Depends(get_storage)],
     session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
 ) -> Response:
-    voice = settings.audio_voice
-    lang = "en"
+    request = AudioRequest(word=word, voice=settings.audio_voice, lang="en")
     await synthesize_with_cache(
         session=session,
         cache_session_factory=session_factory,
         tts=tts,
         storage=storage,
-        word=word,
-        voice=voice,
-        lang=lang,
+        request=request,
     )
     await session.commit()
 
-    key = audio_key(word, voice, lang)
+    key = audio_key(request)
     if isinstance(storage, LocalDirAudioStorage):
         return FileResponse(storage.root / key, media_type="audio/mpeg")
+    # Streaming bytes here (see #2) instead of redirecting to a public URL
+    # keeps private S3 buckets working.
     data = await storage.fetch(key)
     return Response(content=data, media_type="audio/mpeg")

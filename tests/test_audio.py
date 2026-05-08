@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vocab_api.audio import (
+    AudioRequest,
     LocalDirAudioStorage,
     audio_key,
     synthesize_with_cache,
@@ -37,10 +38,10 @@ class _FakeStorage:
 
 
 def testaudio_key_is_stable_and_distinguishes_inputs():
-    a = audio_key("expedition", "en-US-AriaNeural", "en")
-    b = audio_key("expedition", "en-US-AriaNeural", "en")
-    c = audio_key("expedition", "en-US-GuyNeural", "en")
-    d = audio_key("expedition", "en-US-AriaNeural", "de")
+    a = audio_key(AudioRequest(word="expedition"))
+    b = audio_key(AudioRequest(word="expedition"))
+    c = audio_key(AudioRequest(word="expedition", voice="en-US-GuyNeural"))
+    d = audio_key(AudioRequest(word="expedition", lang="de"))
 
     assert a == b
     assert a != c
@@ -72,7 +73,7 @@ async def test_synthesize_with_cache_miss_calls_tts_and_stores(db_session: Async
         cache_session_factory=SessionLocal,
         tts=tts,
         storage=storage,
-        word="expedition",
+        request=AudioRequest(word="expedition"),
     )
 
     assert tts.calls == [("expedition", "en-US-AriaNeural")]
@@ -98,7 +99,7 @@ async def test_synthesize_with_cache_hit_skips_tts_and_storage(db_session: Async
         cache_session_factory=SessionLocal,
         tts=tts,
         storage=storage,
-        word="expedition",
+        request=AudioRequest(word="expedition"),
     )
 
     tts2 = _FakeTts()
@@ -108,12 +109,12 @@ async def test_synthesize_with_cache_hit_skips_tts_and_storage(db_session: Async
         cache_session_factory=SessionLocal,
         tts=tts2,
         storage=storage2,
-        word="expedition",
+        request=AudioRequest(word="expedition"),
     )
 
     assert tts2.calls == []
     assert storage2.objects == {}
-    expected_key = audio_key("expedition", "en-US-AriaNeural", "en")
+    expected_key = audio_key(AudioRequest(word="expedition"))
     assert url == f"https://cdn.example.com/{expected_key}"
 
 
@@ -126,16 +127,14 @@ async def test_synthesize_with_cache_distinguishes_by_voice(db_session: AsyncSes
         cache_session_factory=SessionLocal,
         tts=tts,
         storage=storage,
-        word="hello",
-        voice="en-US-AriaNeural",
+        request=AudioRequest(word="hello", voice="en-US-AriaNeural"),
     )
     await synthesize_with_cache(
         session=db_session,
         cache_session_factory=SessionLocal,
         tts=tts,
         storage=storage,
-        word="hello",
-        voice="en-US-GuyNeural",
+        request=AudioRequest(word="hello", voice="en-US-GuyNeural"),
     )
 
     assert len(tts.calls) == 2

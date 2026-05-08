@@ -21,13 +21,14 @@ from ..deps import (
 from ..gemini import GeminiClient
 from ..models import Entry, User
 from ..operations import (
+    ApprovalDeps,
     ApprovePayload,
     apply_approve,
     apply_reject,
     load_owned_entry,
 )
 from ..schemas import EntryCreate, EntryRead
-from ..worker import process_entry
+from ..worker import WorkerDeps, process_entry
 
 router = APIRouter(prefix="/vocab", tags=["vocab"])
 
@@ -54,19 +55,17 @@ async def create_entry(
     await session.flush()
 
     if settings.gemini_api_key:
+        deps = WorkerDeps(
+            gemini=gemini,
+            tts=tts,
+            storage=storage,
+            anki_writer=anki_writer,
+            cache_session_factory=session_factory,
+            voice=settings.audio_voice,
+        )
         try:
             async with asyncio.timeout(settings.gemini_timeout_s):
-                await process_entry(
-                    session=session,
-                    entry=entry,
-                    user=user,
-                    gemini=gemini,
-                    tts=tts,
-                    storage=storage,
-                    anki_writer=anki_writer,
-                    cache_session_factory=session_factory,
-                    voice=settings.audio_voice,
-                )
+                await process_entry(session=session, entry=entry, user=user, deps=deps)
         except (TimeoutError, httpx.HTTPError):
             pass
 
@@ -104,9 +103,7 @@ async def approve_entry(
         entry=entry,
         payload=payload,
         user=user,
-        storage=storage,
-        anki_writer=anki_writer,
-        voice=settings.audio_voice,
+        deps=ApprovalDeps(storage=storage, anki_writer=anki_writer, voice=settings.audio_voice),
     )
     await session.commit()
     await session.refresh(entry)

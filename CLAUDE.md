@@ -6,9 +6,11 @@ This file is loaded automatically by Claude Code when working in this repo. It c
 
 - **TDD.** Red → green → refactor. Add or change a failing test BEFORE adding production code. The exception is purely mechanical edits (rename, typo, formatting) and exploratory spikes that get reverted.
 - **Clean-code.** Small functions, intention-revealing names, single responsibility. If a function reads top-down, no helpers needed; reach for extraction when the same chunk recurs or the body grows past ~25 LOC.
-- **No comments unless WHY is non-obvious.** Names and structure carry intent. A comment is a workaround for unclear code — fix the code first.
+- **Function parameters: max 5.** Enforced via `ruff PLR0913`. Bundle related collaborators into a `@dataclass` (or pydantic model) and pass the bundle as a single param. Carve-out for FastAPI route handlers (per-file ignore in `pyproject.toml`) — `Depends()`-style injection is the framework's intended pattern. Other exceptions need an inline `# noqa: PLR0913` with a one-line reason.
+- **Comments — light, at critical spots.** Trivial WHAT-comments (`# add the note`) and multi-paragraph docstrings stay forbidden. But brief comments are encouraged where the WHY is genuinely non-obvious from the code: third-party library quirks (anki Rust backend, edge-tts streaming, SQLAlchemy session lifecycle), race conditions, intentional ordering, transaction boundaries, workarounds with a reason. One short line is usually enough; two if needed. If a clearer name would remove the need for the comment, prefer the name.
 - **Type hints everywhere.** `mypy --strict`-clean. Any `Any` is a deliberate decision; document it.
 - **Lint-clean before commit.** `ruff check` + `ruff format` must pass.
+- **PRs and commits are English.** Even when the conversation is in another language, PR titles, PR bodies, commit subjects and bodies are written in English.
 
 ## Stack
 
