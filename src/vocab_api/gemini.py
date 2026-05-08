@@ -35,10 +35,13 @@ class TranslationResult(BaseModel):
 
 _TRANSLATE_PROMPT = """\
 Translate the following English word to German for a vocabulary flashcard.
-Return JSON with these fields:
+Use the sentence to determine the part of speech of the English word, then return JSON:
 - lemma: dictionary form of the English word, lowercase, no article
-- translation: primary German translation including article for nouns (e.g. "die Expedition")
-- alternatives: comma-separated German alternatives, may be empty
+- translation: primary German translation in dictionary form:
+    * for nouns: include article (e.g. "die Expedition")
+    * for verbs: German infinitive only, no article (e.g. "springen", NOT "der Sprung")
+    * for adjectives/adverbs: uninflected form, no article (e.g. "genial", NOT "der geniale")
+- alternatives: comma-separated German alternatives in the same form as `translation`, may be empty
 - ipa: US IPA in slashes (e.g. "/ˌɛkspɪˈdɪʃən/")
 
 Word: {word}

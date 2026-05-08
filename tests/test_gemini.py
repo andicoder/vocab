@@ -77,6 +77,33 @@ async def test_translate_hits_correct_endpoint_and_passes_api_key():
     assert "x" in prompt_text
 
 
+async def test_translate_prompt_includes_part_of_speech_guidance():
+    # Regression for #11: without per-PoS instructions Gemini falls back to
+    # noun-shaped output ("der geniale") for adjectives/verbs.
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_gemini_response(
+                json.dumps({"lemma": "x", "translation": "y", "alternatives": "", "ipa": ""})
+            ),
+        )
+
+    client, http = _make_client(handler)
+    try:
+        await client.translate(word="smirked", sentence="He smirked at the joke.")
+    finally:
+        await http.aclose()
+
+    prompt_text = captured["body"]["contents"][0]["parts"][0]["text"]
+    assert "part of speech" in prompt_text.lower()
+    assert "verbs" in prompt_text and "infinitive" in prompt_text
+    assert "adjectives" in prompt_text
+    assert "nouns" in prompt_text
+
+
 async def test_translate_raises_on_http_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
