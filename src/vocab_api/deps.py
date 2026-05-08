@@ -1,7 +1,7 @@
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from .anki_writer import AnkiWriter
+from .anki_writer import AnkiBackend
 from .audio import AudioStorage, TtsClient
 from .gemini import GeminiClient
 from .worker import WorkerDeps
@@ -26,7 +26,7 @@ def get_storage(request: Request) -> AudioStorage:
     return get_worker_deps(request).storage
 
 
-def get_anki_writer(request: Request) -> AnkiWriter:
+def get_anki_writer(request: Request) -> AnkiBackend:
     return get_worker_deps(request).anki_writer
 
 

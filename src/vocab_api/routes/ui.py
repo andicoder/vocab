@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ..anki_writer import AnkiWriter
+from ..anki_writer import AnkiBackend
 from ..audio import AudioStorage, TtsClient
 from ..auth import current_user
 from ..config import settings
@@ -127,7 +127,7 @@ async def htmx_create_entry(
     gemini: Annotated[GeminiClient, Depends(get_gemini)],
     tts: Annotated[TtsClient, Depends(get_tts)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
-    anki_writer: Annotated[AnkiWriter, Depends(get_anki_writer)],
+    anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
     session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
     word: Annotated[str, Form()],
     sentence: Annotated[str | None, Form()] = None,
@@ -168,7 +168,7 @@ async def htmx_approve(
     user: Annotated[User, Depends(current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
-    anki_writer: Annotated[AnkiWriter, Depends(get_anki_writer)],
+    anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
     lemma: Annotated[str | None, Form()] = None,
     translation: Annotated[str | None, Form()] = None,
     alternatives: Annotated[str | None, Form()] = None,
