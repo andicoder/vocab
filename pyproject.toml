@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vocab-api"
-version = "0.2.0"
+version = "0.1.1"
 description = "Self-hosted vocab + translator service for the family"
 requires-python = ">=3.12"
 authors = [{ name = "andicoder", email = "3944775+andicoder@users.noreply.github.com" }]
