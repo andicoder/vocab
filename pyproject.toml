@@ -18,6 +18,8 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "httpx>=0.28",
+    "edge-tts>=7.0",
+    "aioboto3>=13.2",
 ]
 
 [project.optional-dependencies]
@@ -41,3 +43,7 @@ select = ["E", "F", "I", "B", "UP", "N", "SIM"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[[tool.mypy.overrides]]
+module = ["aioboto3", "aioboto3.*"]
+ignore_missing_imports = true

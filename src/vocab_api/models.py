@@ -91,3 +91,21 @@ class TranslationCache(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class AudioCache(Base):
+    __tablename__ = "audio_cache"
+    __table_args__ = (
+        UniqueConstraint("word", "voice", "lang", name="uq_audio_cache_word_voice_lang"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    word: Mapped[str] = mapped_column(Text, nullable=False)
+    voice: Mapped[str] = mapped_column(
+        String, nullable=False, default="en-US-AriaNeural", server_default="en-US-AriaNeural"
+    )
+    lang: Mapped[str] = mapped_column(String, nullable=False, default="en", server_default="en")
+    s3_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

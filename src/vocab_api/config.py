@@ -14,5 +14,14 @@ class Settings(BaseSettings):
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     gemini_timeout_s: float = 10.0
 
+    s3_endpoint_url: str = ""
+    s3_region: str = "fsn1"
+    s3_bucket: str = "vocab-media"
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    audio_voice: str = "en-US-AriaNeural"
+    audio_local_dir: str = "./var/audio"
+    audio_public_url_base: str = ""
+
 
 settings = Settings()
