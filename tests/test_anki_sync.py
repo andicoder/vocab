@@ -14,6 +14,7 @@ def _content(**overrides: Any) -> VocabCardContent:
         "word": "expedition",
         "lemma": "expedition",
         "sentence": "A grand expedition north.",
+        "cloze_sentence": "A grand ___ north.",
         "translation": "die Expedition",
         "alternatives": "die Reise",
         "ipa": "/ˌɛkspɪˈdɪʃən/",

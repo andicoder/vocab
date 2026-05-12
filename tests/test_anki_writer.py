@@ -15,6 +15,7 @@ def _content(**overrides: object) -> VocabCardContent:
         "word": "x",
         "lemma": "x",
         "sentence": None,
+        "cloze_sentence": "",
         "translation": "y",
         "alternatives": "",
         "ipa": "",
@@ -140,3 +141,132 @@ async def test_audio_field_empty_when_no_audio(tmp_path: Path, audio_filename: s
         assert note["Audio"] == ""
     finally:
         col.close()
+
+
+async def test_cloze_sentence_is_persisted_to_note(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            word="train",
+            lemma="train",
+            sentence="The train leaves at 8.",
+            cloze_sentence="The ___ leaves at 8.",
+            translation="der Zug",
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note = col.get_card(card_id).note()
+        assert note["ClozeSentence"] == "The ___ leaves at 8."
+        assert note["Sentence"] == "The train leaves at 8."
+    finally:
+        col.close()
+
+
+async def test_notetype_includes_cloze_sentence_field(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        field_names = [f["name"] for f in model["flds"]]
+        assert "ClozeSentence" in field_names
+    finally:
+        col.close()
+
+
+async def test_front_template_uses_cloze_sentence_and_translation_hint(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        qfmt = model["tmpls"][0]["qfmt"]
+        # Front must show the gap sentence and the German translation as hint —
+        # the bare {{Word}} must not appear on the front, otherwise the card
+        # gives away the answer (active-recall principle, see #23).
+        assert "{{ClozeSentence}}" in qfmt
+        assert "{{Translation}}" in qfmt
+        assert "{{Word}}" not in qfmt
+    finally:
+        col.close()
+
+
+async def test_back_template_shows_word_audio_and_full_sentence(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        afmt = model["tmpls"][0]["afmt"]
+        assert "{{Word}}" in afmt
+        assert "{{Audio}}" in afmt
+        assert "{{Sentence}}" in afmt
+    finally:
+        col.close()
+
+
+async def test_existing_notetype_gets_cloze_sentence_field_added(tmp_path: Path):
+    # Simulate an Anki collection that already has the legacy 9-field "Vocab"
+    # notetype from before #23 landed. _ensure_notetype must idempotently add
+    # the new ClozeSentence field instead of failing silently.
+    writer = AnkiWriter(root=tmp_path)
+    col_path = writer.collection_path("alice")
+    col_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy = Collection(str(col_path))
+    try:
+        model = legacy.models.new(VOCAB_NOTETYPE)
+        for field_name in (
+            "Word",
+            "Lemma",
+            "Sentence",
+            "Translation",
+            "Alternatives",
+            "IPA",
+            "Audio",
+            "Source",
+            "DateAdded",
+        ):
+            legacy.models.add_field(model, legacy.models.new_field(field_name))
+        template = legacy.models.new_template("Card 1")
+        # Anki refuses to save a template with no field placeholders — give it
+        # a valid (but visibly old) shape so we can prove the migration runs.
+        template["qfmt"] = "legacy {{Word}}"
+        template["afmt"] = "legacy {{Translation}}"
+        legacy.models.add_template(model, template)
+        legacy.models.add(model)
+    finally:
+        legacy.close()
+
+    await writer.write_card(
+        username="alice",
+        content=_content(cloze_sentence="A ___ test."),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        field_names = [f["name"] for f in model["flds"]]
+        # New field appended (Anki forbids re-ordering existing fields with
+        # data without a media migration; we settle for set-equality here).
+        assert set(field_names) == set(VOCAB_FIELDS)
+        # Legacy template strings must be refreshed so old cards render with
+        # the new layout after the migration runs.
+        assert model["tmpls"][0]["qfmt"] == _FRONT_TEMPLATE_EXPECTED
+        assert "{{ClozeSentence}}" in model["tmpls"][0]["qfmt"]
+    finally:
+        col.close()
+
+
+_FRONT_TEMPLATE_EXPECTED = (
+    '<div class="cloze-sentence">{{ClozeSentence}}</div><div class="hint">({{Translation}})</div>'
+)

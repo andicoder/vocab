@@ -11,6 +11,7 @@ VOCAB_FIELDS = [
     "Word",
     "Lemma",
     "Sentence",
+    "ClozeSentence",
     "Translation",
     "Alternatives",
     "IPA",
@@ -18,6 +19,19 @@ VOCAB_FIELDS = [
     "Source",
     "DateAdded",
 ]
+
+_FRONT_TEMPLATE = (
+    '<div class="cloze-sentence">{{ClozeSentence}}</div><div class="hint">({{Translation}})</div>'
+)
+_BACK_TEMPLATE = (
+    "{{FrontSide}}<hr>"
+    '<div class="word">{{Word}}</div>'
+    "{{Audio}}"
+    '<div class="sentence">{{Sentence}}</div>'
+    '<div class="alternatives">{{Alternatives}}</div>'
+    '<div class="ipa">{{IPA}}</div>'
+    '<div class="source">{{Source}}</div>'
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +41,7 @@ class VocabCardContent:
     word: str
     lemma: str
     sentence: str | None
+    cloze_sentence: str
     translation: str
     alternatives: str
     ipa: str
@@ -66,6 +81,7 @@ def add_vocab_note(col: Collection, deck_name: str, content: VocabCardContent) -
     note["Word"] = content.word
     note["Lemma"] = content.lemma
     note["Sentence"] = content.sentence or ""
+    note["ClozeSentence"] = content.cloze_sentence
     note["Translation"] = content.translation
     note["Alternatives"] = content.alternatives
     note["IPA"] = content.ipa
@@ -113,24 +129,44 @@ class AnkiWriter:
 
 def _ensure_notetype(col: Collection) -> dict:  # type: ignore[type-arg]
     existing = col.models.by_name(VOCAB_NOTETYPE)
-    if existing is not None:
-        return existing
+    if existing is None:
+        return _create_notetype(col)
+    _migrate_notetype(col, existing)
+    return existing
 
+
+def _create_notetype(col: Collection) -> dict:  # type: ignore[type-arg]
     model = col.models.new(VOCAB_NOTETYPE)
     for field_name in VOCAB_FIELDS:
         col.models.add_field(model, col.models.new_field(field_name))
 
     template = col.models.new_template("Card 1")
-    template["qfmt"] = (
-        '<div class="word">{{Word}}</div><div class="sentence">{{Sentence}}</div>{{Audio}}'
-    )
-    template["afmt"] = (
-        "{{FrontSide}}<hr>"
-        '<div class="translation">{{Translation}}</div>'
-        '<div class="alternatives">{{Alternatives}}</div>'
-        '<div class="ipa">{{IPA}}</div>'
-        '<div class="source">{{Source}}</div>'
-    )
+    template["qfmt"] = _FRONT_TEMPLATE
+    template["afmt"] = _BACK_TEMPLATE
     col.models.add_template(model, template)
     col.models.add(model)
     return model
+
+
+def _migrate_notetype(col: Collection, model: dict) -> None:  # type: ignore[type-arg]
+    """Bring an existing 'Vocab' notetype up to the current field+template spec.
+
+    Called on every write, so it must be idempotent and cheap when there's
+    nothing to do. Missing fields get appended (Anki forbids removing fields
+    that already hold data, and we don't need to). Template strings are
+    rewritten unconditionally — assignment to the same value is a no-op."""
+    existing_names = {f["name"] for f in model["flds"]}
+    added = False
+    for field_name in VOCAB_FIELDS:
+        if field_name not in existing_names:
+            col.models.add_field(model, col.models.new_field(field_name))
+            added = True
+
+    template = model["tmpls"][0]
+    templates_changed = template["qfmt"] != _FRONT_TEMPLATE or template["afmt"] != _BACK_TEMPLATE
+    if templates_changed:
+        template["qfmt"] = _FRONT_TEMPLATE
+        template["afmt"] = _BACK_TEMPLATE
+
+    if added or templates_changed:
+        col.models.update_dict(model)
