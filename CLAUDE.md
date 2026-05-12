@@ -5,8 +5,13 @@ This file is loaded automatically by Claude Code when working in this repo. It c
 ## Discipline
 
 - **TDD.** Red → green → refactor. Add or change a failing test BEFORE adding production code. The exception is purely mechanical edits (rename, typo, formatting) and exploratory spikes that get reverted.
-- **Clean-code.** Small functions, intention-revealing names, single responsibility. If a function reads top-down, no helpers needed; reach for extraction when the same chunk recurs or the body grows past ~25 LOC.
-- **Function parameters: max 5.** Enforced via `ruff PLR0913`. Bundle related collaborators into a `@dataclass` (or pydantic model) and pass the bundle as a single param. Carve-out for FastAPI route handlers (per-file ignore in `pyproject.toml`) — `Depends()`-style injection is the framework's intended pattern. Other exceptions need an inline `# noqa: PLR0913` with a one-line reason.
+- **Clean-code.** Small functions, intention-revealing names, single responsibility. If a function reads top-down, no helpers needed; reach for extraction when the same chunk recurs or the body grows past the soft limit below.
+- **Code size limits — all enforced via ruff.** Aim for the soft target; the hard ceiling is what fails CI.
+  - **Line length: 100** (`line-length = 100`). PEP 8's 79 is too tight for modern editors; >120 makes side-by-side diffs unreadable.
+  - **Function body: ~25 LOC soft, 30 statements hard** (`PLR0915`, `max-statements = 30`). Extract a helper when the body grows past that or when the same chunk recurs. Cohesive migration functions can earn a `# noqa: PLR0915` with a one-line reason — splitting them just to dodge the rule hides the logic.
+  - **Function arguments: max 5** (`PLR0913`). Bundle related collaborators into a `@dataclass` or pydantic model and pass the bundle as a single param. Carve-out for FastAPI route handlers (per-file ignore in `pyproject.toml`) — `Depends()`-style injection is the framework's intended pattern. Other exceptions need an inline `# noqa: PLR0913` with a one-line reason.
+  - **Cyclomatic complexity: max 10** (`C901`). Deeply branched logic is a refactor signal — usually a state machine, a polymorphism, or a guard-clause extraction.
+  - **Statements per function, branches, return points: ruff defaults** (`PLR0912`, `PLR0911`). If you hit them you're almost certainly mixing concerns.
 - **Comments — light, at critical spots.** Trivial WHAT-comments (`# add the note`) and multi-paragraph docstrings stay forbidden. But brief comments are encouraged where the WHY is genuinely non-obvious from the code: third-party library quirks (anki Rust backend, edge-tts streaming, SQLAlchemy session lifecycle), race conditions, intentional ordering, transaction boundaries, workarounds with a reason. One short line is usually enough; two if needed. If a clearer name would remove the need for the comment, prefer the name.
 - **Type hints everywhere.** `mypy --strict`-clean. Any `Any` is a deliberate decision; document it.
 - **Lint-clean before commit.** `ruff check` + `ruff format` must pass.
