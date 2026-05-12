@@ -18,6 +18,7 @@ def _content(**overrides: Any) -> VocabCardContent:
         "translation": "die Expedition",
         "alternatives": "die Reise",
         "ipa": "/ˌɛkspɪˈdɪʃən/",
+        "sense_label": "",
         "audio_data": b"FAKE-MP3",
         "audio_filename": "abc123.mp3",
         "source": "test-source",

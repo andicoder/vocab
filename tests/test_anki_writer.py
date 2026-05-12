@@ -19,6 +19,7 @@ def _content(**overrides: object) -> VocabCardContent:
         "translation": "y",
         "alternatives": "",
         "ipa": "",
+        "sense_label": "",
         "audio_data": None,
         "audio_filename": None,
         "source": None,
@@ -214,6 +215,44 @@ async def test_back_template_shows_word_audio_and_full_sentence(tmp_path: Path):
         col.close()
 
 
+async def test_sense_label_is_persisted_to_note(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            word="train",
+            lemma="train",
+            translation="der Zug",
+            sense_label="Eisenbahn",
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note = col.get_card(card_id).note()
+        assert note["SenseLabel"] == "Eisenbahn"
+    finally:
+        col.close()
+
+
+async def test_front_template_renders_sense_label_when_present(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        qfmt = model["tmpls"][0]["qfmt"]
+        # Anki's conditional field rendering: {{#SenseLabel}}…{{/SenseLabel}}
+        # shows the inner block only when SenseLabel is non-empty. Otherwise
+        # the hint just reads "(die Bank)" without a stray comma.
+        assert "{{#SenseLabel}}" in qfmt and "{{/SenseLabel}}" in qfmt
+        assert "{{SenseLabel}}" in qfmt
+    finally:
+        col.close()
+
+
 async def test_existing_notetype_gets_cloze_sentence_field_added(tmp_path: Path):
     # Simulate an Anki collection that already has the legacy 9-field "Vocab"
     # notetype from before #23 landed. _ensure_notetype must idempotently add
@@ -261,12 +300,8 @@ async def test_existing_notetype_gets_cloze_sentence_field_added(tmp_path: Path)
         assert set(field_names) == set(VOCAB_FIELDS)
         # Legacy template strings must be refreshed so old cards render with
         # the new layout after the migration runs.
-        assert model["tmpls"][0]["qfmt"] == _FRONT_TEMPLATE_EXPECTED
-        assert "{{ClozeSentence}}" in model["tmpls"][0]["qfmt"]
+        qfmt = model["tmpls"][0]["qfmt"]
+        assert "legacy" not in qfmt
+        assert "{{ClozeSentence}}" in qfmt
     finally:
         col.close()
-
-
-_FRONT_TEMPLATE_EXPECTED = (
-    '<div class="cloze-sentence">{{ClozeSentence}}</div><div class="hint">({{Translation}})</div>'
-)

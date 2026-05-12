@@ -733,6 +733,122 @@ async def test_cloze_sentence_invented_when_word_not_in_source_sentence(
     assert entry.sentence == "Dozens turned up at the door."
 
 
+async def test_polyseme_same_lemma_different_sense_is_kept_as_separate_card(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # User already has "train" as a noun (Eisenbahn). The new entry uses
+    # "train" as a verb (sportlich) — different sense_key, so the worker
+    # must NOT drop it. Both cards live side-by-side under #24.
+    user = User(username="alice")
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        Entry(
+            user_id=user.id,
+            word="train",
+            lemma="train",
+            translation="der Zug",
+            sense_key="noun-railway",
+            sense_label="Eisenbahn",
+            status="synced",
+            lang="en",
+        )
+    )
+    pending = Entry(
+        user_id=user.id,
+        word="train",
+        sentence="I need to train for a marathon.",
+        lang="en",
+    )
+    db_session.add(pending)
+    await db_session.flush()
+
+    payload = {
+        "lemma": "train",
+        "translation": "trainieren",
+        "alternatives": "",
+        "ipa": "/treɪn/",
+        "sense_key": "verb-exercise",
+        "sense_label": "sportlich",
+    }
+    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=pending,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert pending.status == "synced"
+    assert pending.sense_key == "verb-exercise"
+    assert pending.sense_label == "sportlich"
+    surviving = await db_session.scalar(select(func.count()).select_from(Entry))
+    assert surviving == 2  # both senses live as separate cards
+
+
+async def test_polyseme_same_lemma_same_sense_is_dropped(db_session: AsyncSession, tmp_path: Path):
+    # Same (lemma, sense_key) as an existing card — a real duplicate. The
+    # worker drops the new entry, just as before (#10 still holds for the
+    # same-meaning case).
+    user = User(username="alice")
+    db_session.add(user)
+    await db_session.flush()
+    db_session.add(
+        Entry(
+            user_id=user.id,
+            word="train",
+            lemma="train",
+            translation="trainieren",
+            sense_key="verb-exercise",
+            sense_label="sportlich",
+            status="synced",
+            lang="en",
+        )
+    )
+    pending = Entry(
+        user_id=user.id,
+        word="train",
+        sentence="I need to train for a marathon.",
+        lang="en",
+    )
+    db_session.add(pending)
+    await db_session.flush()
+    pending_id = pending.id
+
+    payload = {
+        "lemma": "train",
+        "translation": "trainieren",
+        "alternatives": "",
+        "ipa": "/treɪn/",
+        "sense_key": "verb-exercise",
+        "sense_label": "sportlich",
+    }
+    gemini, http = _gemini_client(_make_translate_only_handler(payload))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        result = await process_entry(
+            session=db_session,
+            entry=pending,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert result == "train"
+    await db_session.flush()
+    assert await db_session.get(Entry, pending_id) is None
+    assert tts.calls == []
+
+
 async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
     gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
