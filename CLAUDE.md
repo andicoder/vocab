@@ -10,7 +10,7 @@ This file is loaded automatically by Claude Code when working in this repo. It c
 - **Comments — light, at critical spots.** Trivial WHAT-comments (`# add the note`) and multi-paragraph docstrings stay forbidden. But brief comments are encouraged where the WHY is genuinely non-obvious from the code: third-party library quirks (anki Rust backend, edge-tts streaming, SQLAlchemy session lifecycle), race conditions, intentional ordering, transaction boundaries, workarounds with a reason. One short line is usually enough; two if needed. If a clearer name would remove the need for the comment, prefer the name.
 - **Type hints everywhere.** `mypy --strict`-clean. Any `Any` is a deliberate decision; document it.
 - **Lint-clean before commit.** `ruff check` + `ruff format` must pass.
-- **PRs and commits are English.** Even when the conversation is in another language, PR titles, PR bodies, commit subjects and bodies are written in English.
+- **PRs, commits and issues are English.** Even when the conversation is in another language, issue titles, issue bodies, PR titles, PR bodies, commit subjects and commit bodies are written in English.
 
 ## Stack
 
