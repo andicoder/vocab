@@ -53,6 +53,7 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
         word=entry.word,
         lemma=entry.lemma,
         sentence=entry.sentence,
+        cloze_sentence=entry.cloze_sentence or "",
         translation=entry.translation,
         alternatives=entry.alternatives or "",
         ipa=entry.ipa or "",

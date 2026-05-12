@@ -48,6 +48,7 @@ class Entry(Base):
     word: Mapped[str] = mapped_column(Text, nullable=False)
     lemma: Mapped[str | None] = mapped_column(Text, nullable=True)
     sentence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cloze_sentence: Mapped[str | None] = mapped_column(Text, nullable=True)
     translation: Mapped[str | None] = mapped_column(Text, nullable=True)
     alternatives: Mapped[str | None] = mapped_column(Text, nullable=True)
     ipa: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -21,31 +21,70 @@ def _gemini_response(text: str) -> dict:
     return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]}
 
 
-def _make_handler(translate_payload: dict, verdict: str):
+_DEFAULT_INVENTED = {
+    "sentence": "An invented example sentence.",
+    "cloze_sentence": "An invented example ___.",
+}
+
+
+def _classify(body: dict) -> str:
+    """Decide which Gemini operation a mock request represents.
+
+    Both translate and invent_example request JSON; only the prompt text
+    can distinguish them. Keep the heuristic narrow so prompt edits don't
+    silently re-route tests."""
+    is_json = body.get("generationConfig", {}).get("responseMimeType") == "application/json"
+    if not is_json:
+        return "plausibility"
+    prompt = body["contents"][0]["parts"][0]["text"]
+    return "invent" if "Invent" in prompt else "translate"
+
+
+def _make_handler(translate_payload: dict, verdict: str, invented: dict | None = None):
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        is_translate = (
-            body.get("generationConfig", {}).get("responseMimeType") == "application/json"
-        )
-        text = json.dumps(translate_payload) if is_translate else verdict
+        kind = _classify(body)
+        if kind == "translate":
+            text = json.dumps(translate_payload)
+        elif kind == "invent":
+            text = json.dumps(invented or _DEFAULT_INVENTED)
+        else:
+            text = verdict
         return httpx.Response(200, json=_gemini_response(text))
 
     return handler
 
 
 def _make_translate_only_handler(translate_payload: dict):
-    # Asserts plausibility is never called — used to prove the duplicate path
-    # short-circuits before the (uncached, expensive) plausibility request.
+    # Asserts plausibility and invent are never called — used to prove the
+    # duplicate path short-circuits before any further Gemini request.
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        is_translate = (
-            body.get("generationConfig", {}).get("responseMimeType") == "application/json"
-        )
-        if not is_translate:
-            raise AssertionError("plausibility must not run for duplicates")
+        kind = _classify(body)
+        if kind != "translate":
+            raise AssertionError(f"only translate may run for duplicates; got {kind}")
         return httpx.Response(200, json=_gemini_response(json.dumps(translate_payload)))
 
     return handler
+
+
+def _counting_handler(translate_payload: dict, verdict: str, invented: dict | None = None):
+    """Same as _make_handler but exposes a per-kind call counter."""
+    counts: dict[str, int] = {"translate": 0, "plausibility": 0, "invent": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        kind = _classify(body)
+        counts[kind] += 1
+        if kind == "translate":
+            text = json.dumps(translate_payload)
+        elif kind == "invent":
+            text = json.dumps(invented or _DEFAULT_INVENTED)
+        else:
+            text = verdict
+        return httpx.Response(200, json=_gemini_response(text))
+
+    return handler, counts
 
 
 def _gemini_client(handler) -> tuple[GeminiClient, httpx.AsyncClient]:
@@ -595,6 +634,103 @@ async def test_worker_loop_backs_off_exponentially_on_consecutive_failures(
     # The first post-success sleep is the regular empty-queue poll, not
     # backoff — proves the counter resets.
     assert sleeps[3] == 5.0
+
+
+async def test_cloze_sentence_derived_from_source_sentence_skips_invent_call(
+    db_session: AsyncSession, tmp_path: Path
+):
+    user, entry = await _make_pending_entry(
+        db_session, word="expedition", sentence="A grand expedition north."
+    )
+    handler, counts = _counting_handler(_TRANSLATE_PAYLOAD, "YES")
+    gemini, http = _gemini_client(handler)
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.cloze_sentence == "A grand ___ north."
+    # Deterministic regex path — Gemini's invent_example must not be called.
+    assert counts["invent"] == 0
+    # Source sentence stays untouched on the entry.
+    assert entry.sentence == "A grand expedition north."
+
+
+async def test_cloze_sentence_invented_when_entry_has_no_sentence(
+    db_session: AsyncSession, tmp_path: Path
+):
+    user, entry = await _make_pending_entry(db_session, word="expedition", sentence=None)
+    invented = {
+        "sentence": "We launched an expedition north.",
+        "cloze_sentence": "We launched an ___ north.",
+    }
+    handler, counts = _counting_handler(_TRANSLATE_PAYLOAD, "YES", invented=invented)
+    gemini, http = _gemini_client(handler)
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert counts["invent"] == 1
+    assert entry.sentence == "We launched an expedition north."
+    assert entry.cloze_sentence == "We launched an ___ north."
+
+
+async def test_cloze_sentence_invented_when_word_not_in_source_sentence(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # Edge case: user submits `word="dozens"` with a sentence that contains
+    # only the lemma form `dozen`. The deterministic regex fails, so the
+    # worker has to fall back to inventing an example based on the lemma.
+    user, entry = await _make_pending_entry(
+        db_session, word="dozens", sentence="Only a dozen left."
+    )
+    invented = {
+        "sentence": "Dozens turned up at the door.",
+        "cloze_sentence": "___ turned up at the door.",
+    }
+    payload = {
+        "lemma": "dozen",
+        "translation": "das Dutzend",
+        "alternatives": "",
+        "ipa": "/ˈdʌzən/",
+    }
+    handler, counts = _counting_handler(payload, "YES", invented=invented)
+    gemini, http = _gemini_client(handler)
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert counts["invent"] == 1
+    assert entry.cloze_sentence == "___ turned up at the door."
+    # Source sentence is overwritten because the original did not contain the
+    # surface form — keep front and back in sync.
+    assert entry.sentence == "Dozens turned up at the door."
 
 
 async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_path: Path):

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .anki_writer import AnkiBackend
 from .audio import AudioRequest, AudioStorage, TtsClient, synthesize_with_cache
+from .cloze import mask_word_in_sentence
 from .gemini import GeminiClient, TranslationRequest, translate_with_cache
 from .models import Entry, User
 from .operations import ApprovalDeps, write_entry_to_anki
@@ -96,6 +97,7 @@ async def process_entry(
         storage=deps.storage,
         request=AudioRequest(word=translation.lemma, voice=deps.voice, lang=entry.lang),
     )
+    await _populate_cloze(entry, gemini=deps.gemini, lemma=translation.lemma)
 
     entry.lemma = translation.lemma
     entry.translation = translation.translation
@@ -125,6 +127,30 @@ async def process_entry(
             verdict,
         )
     return None
+
+
+async def _populate_cloze(entry: Entry, *, gemini: GeminiClient, lemma: str) -> None:
+    """Fill `entry.cloze_sentence` (and `entry.sentence` if it was empty).
+
+    Prefers the deterministic path: mask the user-submitted surface form
+    (entry.word) inside the user-submitted source sentence. Falls back to
+    a Gemini-invented example only when there is no source sentence at all
+    or when the surface form does not appear in the source sentence
+    (a rare edge case worth a warning)."""
+    if entry.sentence:
+        masked = mask_word_in_sentence(word=entry.word, sentence=entry.sentence)
+        if masked is not None:
+            entry.cloze_sentence = masked
+            return
+        log.warning(
+            "cloze regex miss id=%s word=%r — falling back to invented example",
+            entry.id,
+            entry.word,
+        )
+
+    invented = await gemini.invent_example(lemma=lemma)
+    entry.sentence = invented.sentence
+    entry.cloze_sentence = invented.cloze_sentence
 
 
 async def _lemma_already_exists(
