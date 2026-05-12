@@ -15,6 +15,7 @@ from .config import settings
 from .db import SessionLocal
 from .gemini import GeminiClient
 from .routes import audio, imports, translate, ui, vocab
+from .routes import settings as settings_routes
 from .worker import WorkerDeps, run_worker
 
 # uvicorn installs its own handlers before our app code runs; force=True so
@@ -86,6 +87,7 @@ app.include_router(vocab.router)
 app.include_router(translate.router)
 app.include_router(audio.router)
 app.include_router(imports.router)
+app.include_router(settings_routes.router)
 app.include_router(ui.router)
 
 
