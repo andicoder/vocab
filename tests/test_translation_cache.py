@@ -19,12 +19,18 @@ def _gemini_response(text: str) -> dict:
 
 
 def _payload(translation: str = "die Expedition") -> str:
+    # The cache reader skips rows where both collocations and extra_examples
+    # are empty (#43 — stale rows from migration defaults). Tests that rely
+    # on cache *hits* therefore have to return at least one of the two from
+    # the mock so the row counts as fresh.
     return json.dumps(
         {
             "lemma": "expedition",
             "translation": translation,
             "alternatives": "",
             "ipa": "/ˌɛkspɪˈdɪʃən/",
+            "collocations": ["go on an expedition"],
+            "extra_examples": ["She joined an expedition to the Amazon."],
         }
     )
 
@@ -68,6 +74,8 @@ async def test_cache_miss_calls_gemini_and_stores(db_session: AsyncSession):
         translation="die Expedition",
         alternatives="",
         ipa="/ˌɛkspɪˈdɪʃən/",
+        collocations=["go on an expedition"],
+        extra_examples=["She joined an expedition to the Amazon."],
     )
 
     rows = (await db_session.execute(select(TranslationCache))).scalars().all()
@@ -145,20 +153,26 @@ async def test_cache_row_with_empty_collocations_and_extras_is_treated_as_miss(
     # hit would permanently shadow Gemini's new behavior for the
     # affected words. The reader skips these rows so they get
     # overwritten on the next translate.
-    db_session.add(
-        TranslationCache(
-            word="expedition",
-            sentence_hash=None,
-            lang="en",
-            lemma="expedition",
-            translation="STALE",
-            alternatives="",
-            ipa="",
-            collocations="",
-            extra_examples="",
+    #
+    # The stale row is committed via a *separate* session: putting it
+    # inside the test's outer transaction (db_session) would deadlock
+    # the inner `cache_session_factory` connection that
+    # translate_with_cache opens to upsert the fresh row — PG
+    # unique-constraint waits cross-connection on the uncommitted key.
+    async with SessionLocal() as setup, setup.begin():
+        setup.add(
+            TranslationCache(
+                word="expedition",
+                sentence_hash=None,
+                lang="en",
+                lemma="expedition",
+                translation="STALE",
+                alternatives="",
+                ipa="",
+                collocations="",
+                extra_examples="",
+            )
         )
-    )
-    await db_session.flush()
 
     calls = 0
 
@@ -199,20 +213,22 @@ async def test_cache_row_with_only_one_field_populated_still_hits(
     # Rows that have at least one of collocations / extra_examples
     # populated are considered fresh — they came from the post-#26/#27
     # worker. Re-querying every time would defeat the cache.
-    db_session.add(
-        TranslationCache(
-            word="however",
-            sentence_hash=None,
-            lang="en",
-            lemma="however",
-            translation="jedoch",
-            alternatives="allerdings",
-            ipa="",
-            collocations="",
-            extra_examples="However, the plan succeeded.",
+    # Setup uses a separately committed session for the same reason as
+    # the test above (cross-connection unique-constraint deadlock).
+    async with SessionLocal() as setup, setup.begin():
+        setup.add(
+            TranslationCache(
+                word="however",
+                sentence_hash=None,
+                lang="en",
+                lemma="however",
+                translation="jedoch",
+                alternatives="allerdings",
+                ipa="",
+                collocations="",
+                extra_examples="However, the plan succeeded.",
+            )
         )
-    )
-    await db_session.flush()
 
     calls = 0
 
