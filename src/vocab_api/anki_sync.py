@@ -39,12 +39,10 @@ class AnkiSyncWriter:
         shadow_root: Path,
         sync_endpoint: str,
         credentials: dict[str, str],
-        deck_name: str = "Default",
     ) -> None:
         self._shadow_root = shadow_root
         self._sync_endpoint = sync_endpoint
         self._credentials = credentials
-        self._deck_name = deck_name
         # Per-user hkey cache. SyncAuth is a protobuf message, lifetime
         # spans process — no expiry handling needed for the family-scale
         # deployment.
@@ -62,18 +60,23 @@ class AnkiSyncWriter:
             self._user_locks[username] = asyncio.Lock()
         return self._user_locks[username]
 
-    async def write_card(
+    async def write_card(  # noqa: PLR0913 — protocol params; bundling them into a struct would just bury them
         self,
         *,
         username: str,
         content: VocabCardContent,
         direction: CardDirection = "de_en",
+        lang: str = "en",
     ) -> int:
         async with self._user_lock(username):
-            return await asyncio.to_thread(self._write_and_sync, username, content, direction)
+            return await asyncio.to_thread(self._write_and_sync, username, content, direction, lang)
 
     def _write_and_sync(
-        self, username: str, content: VocabCardContent, direction: CardDirection
+        self,
+        username: str,
+        content: VocabCardContent,
+        direction: CardDirection,
+        lang: str,
     ) -> int:
         if username not in self._credentials:
             raise RuntimeError(
@@ -92,7 +95,7 @@ class AnkiSyncWriter:
             # review, etc.) before we mutate; otherwise the upstream sync
             # may flag a conflict that needs a full sync to resolve.
             col.sync_collection(auth, sync_media=False)
-            card_id = add_vocab_note(col, self._deck_name, content, direction=direction)
+            card_id = add_vocab_note(col, content, direction=direction, lang=lang)
             col.sync_collection(auth, sync_media=True)
             return card_id
         finally:

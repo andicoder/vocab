@@ -3,7 +3,13 @@ from pathlib import Path
 import pytest
 from anki.collection import Collection
 
-from vocab_api.anki_writer import VOCAB_FIELDS, VOCAB_NOTETYPE, AnkiWriter, VocabCardContent
+from vocab_api.anki_writer import (
+    VOCAB_FIELDS,
+    VOCAB_NOTETYPE,
+    AnkiWriter,
+    VocabCardContent,
+    deck_name_for,
+)
 
 
 def _open_collection(root: Path, username: str) -> Collection:
@@ -251,6 +257,90 @@ async def test_front_template_renders_sense_label_when_present(tmp_path: Path):
         assert "{{SenseLabel}}" in qfmt
     finally:
         col.close()
+
+
+def _card_deck_name(col: Collection, card_id: int) -> str:
+    card = col.get_card(card_id)
+    name = col.decks.name(card.did)
+    assert isinstance(name, str)
+    return name
+
+
+async def test_de_en_card_lands_in_lang_subdeck(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(username="alice", content=_content(), lang="en")
+    col = _open_collection(tmp_path, "alice")
+    try:
+        assert _card_deck_name(col, card_id) == "Englisch::DE→EN"
+    finally:
+        col.close()
+
+
+async def test_en_de_card_lands_in_recognition_subdeck(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice", content=_content(), direction="en_de", lang="en"
+    )
+    col = _open_collection(tmp_path, "alice")
+    try:
+        assert _card_deck_name(col, card_id) == "Englisch::EN→DE"
+    finally:
+        col.close()
+
+
+async def test_both_direction_routes_each_card_to_its_own_subdeck(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    # write_card returns the first card; we look up both cards on the note.
+    await writer.write_card(username="alice", content=_content(), direction="both", lang="en")
+    col = _open_collection(tmp_path, "alice")
+    try:
+        cards = list(col.find_cards(""))
+        assert len(cards) == 2
+        deck_names = sorted(_card_deck_name(col, cid) for cid in cards)
+        assert deck_names == ["Englisch::DE→EN", "Englisch::EN→DE"]
+    finally:
+        col.close()
+
+
+async def test_unknown_lang_creates_uppercase_fallback_subdeck(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(username="alice", content=_content(), lang="tlh")
+    col = _open_collection(tmp_path, "alice")
+    try:
+        assert _card_deck_name(col, card_id) == "TLH::DE→EN"
+    finally:
+        col.close()
+
+
+async def test_existing_card_keeps_its_deck_when_lang_switches(tmp_path: Path):
+    # First note is English; second note is Spanish. The existing English
+    # card must stay in its deck — the per-template `did` only influences
+    # newly generated cards (#34).
+    writer = AnkiWriter(root=tmp_path)
+    en_card = await writer.write_card(
+        username="alice", content=_content(word="train", lemma="train"), lang="en"
+    )
+    es_card = await writer.write_card(
+        username="alice", content=_content(word="tren", lemma="tren"), lang="es"
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        assert _card_deck_name(col, en_card) == "Englisch::DE→EN"
+        assert _card_deck_name(col, es_card) == "Spanisch::DE→EN"
+    finally:
+        col.close()
+
+
+def test_deck_name_for_known_language_uses_german_display_name():
+    assert deck_name_for(lang="en", template_name="DE→EN") == "Englisch::DE→EN"
+    assert deck_name_for(lang="es", template_name="EN→DE") == "Spanisch::EN→DE"
+    assert deck_name_for(lang="nl", template_name="DE→EN") == "Niederländisch::DE→EN"
+
+
+def test_deck_name_for_unknown_language_falls_back_to_uppercase_code():
+    # No mapping for "tlh" — keep emitting a sensible deck rather than crash.
+    assert deck_name_for(lang="tlh", template_name="DE→EN") == "TLH::DE→EN"
 
 
 async def test_default_direction_creates_only_de_en_template(tmp_path: Path):
