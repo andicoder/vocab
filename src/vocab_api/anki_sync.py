@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import cast
 
@@ -20,6 +21,13 @@ _INCREMENTAL_REQUIRED = {
     SyncCollectionResponse.NO_CHANGES,
     SyncCollectionResponse.NORMAL_SYNC,
 }
+
+# How long we wait for the media-sync background task to finish before
+# giving up. Each card carries one ~30 kB audio file, so 60 s is many
+# orders of magnitude of safety margin; the cap exists to keep a stalled
+# media sync from blocking the entry queue indefinitely (#42).
+_MEDIA_SYNC_TIMEOUT_S = 60.0
+_MEDIA_SYNC_POLL_INTERVAL_S = 0.5
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +119,7 @@ class AnkiSyncWriter:
             card_id = add_vocab_note(col, content, direction=direction, lang=lang)
             push = col.sync_collection(auth, sync_media=True)
             _resolve_after_write(col, push, auth=auth, username=username)
+            _wait_for_media_sync(col, auth=auth, username=username)
             return card_id
         finally:
             col.close()
@@ -173,6 +182,32 @@ def _resolve_after_write(
         f"full sync required after write (required={required}) "
         f"for user '{username}'; aborting before data loss"
     )
+
+
+def _wait_for_media_sync(col: Collection, *, auth: SyncAuth, username: str) -> None:
+    """Block until the media-sync background task signals idle.
+
+    `col.sync_collection(sync_media=True)` only *starts* the media-sync
+    background task; `col.close()` immediately after terminates the
+    worker before the audio uploads, leaving notes that reference
+    `[sound:<hash>.mp3]` files that never reached the server (#42).
+    Polling `media_sync_status` here keeps the Collection open until the
+    transfer is done."""
+    col.sync_media(auth)
+    deadline = time.monotonic() + _MEDIA_SYNC_TIMEOUT_S
+    while True:
+        status = col.media_sync_status()
+        if not status.active:
+            return
+        if time.monotonic() > deadline:
+            log.warning(
+                "anki-sync: media sync still active after %.0fs user=%s; aborting",
+                _MEDIA_SYNC_TIMEOUT_S,
+                username,
+            )
+            col.abort_media_sync()
+            return
+        time.sleep(_MEDIA_SYNC_POLL_INTERVAL_S)
 
 
 def parse_credentials_json(raw: str) -> dict[str, str]:
