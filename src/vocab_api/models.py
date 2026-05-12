@@ -37,7 +37,9 @@ class User(Base):
 class Entry(Base):
     __tablename__ = "entry"
     __table_args__ = (
-        UniqueConstraint("user_id", "lemma", "lang", name="uq_entry_user_lemma_lang"),
+        UniqueConstraint(
+            "user_id", "lemma", "lang", "sense_key", name="uq_entry_user_lemma_lang_sense"
+        ),
         Index("idx_entry_user_status", "user_id", "status"),
     )
 
@@ -54,6 +56,13 @@ class Entry(Base):
     ipa: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # `sense_key` lets the same lemma exist multiple times per user — one row
+    # per distinct meaning (see #24). "default" is the slug used for legacy
+    # rows that pre-date polysemy support.
+    sense_key: Mapped[str] = mapped_column(
+        String, nullable=False, default="default", server_default="default"
+    )
+    sense_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     lang: Mapped[str] = mapped_column(String, nullable=False, default="en", server_default="en")
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending", server_default="pending"
@@ -89,6 +98,10 @@ class TranslationCache(Base):
     translation: Mapped[str] = mapped_column(Text, nullable=False)
     alternatives: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     ipa: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    sense_key: Mapped[str] = mapped_column(
+        Text, nullable=False, default="default", server_default="default"
+    )
+    sense_label: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
