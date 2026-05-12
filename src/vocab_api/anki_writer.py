@@ -11,6 +11,7 @@ VOCAB_FIELDS = [
     "Word",
     "Lemma",
     "Sentence",
+    "ExtraExamples",
     "ClozeSentence",
     "Translation",
     "Alternatives",
@@ -62,6 +63,7 @@ _BACK_DE_EN = (
     '<div class="word">{{Word}}</div>'
     "{{Audio}}"
     '<div class="sentence">{{Sentence}}</div>'
+    '{{#ExtraExamples}}<div class="extra-examples">{{ExtraExamples}}</div>{{/ExtraExamples}}'
     '{{#Collocations}}<div class="collocations">{{Collocations}}</div>{{/Collocations}}'
     '<div class="alternatives">{{Alternatives}}</div>'
     '<div class="ipa">{{IPA}}</div>'
@@ -77,6 +79,7 @@ _BACK_EN_DE = (
     '<div class="translation">{{Translation}}{{#SenseLabel}}, {{SenseLabel}}{{/SenseLabel}}</div>'
     "{{Audio}}"
     '<div class="sentence">{{Sentence}}</div>'
+    '{{#ExtraExamples}}<div class="extra-examples">{{ExtraExamples}}</div>{{/ExtraExamples}}'
     '{{#Collocations}}<div class="collocations">{{Collocations}}</div>{{/Collocations}}'
     '<div class="alternatives">{{Alternatives}}</div>'
     '<div class="ipa">{{IPA}}</div>'
@@ -107,6 +110,7 @@ class VocabCardContent:
     ipa: str
     sense_label: str
     collocations: str
+    extra_examples: str
     audio_data: bytes | None
     audio_filename: str | None
     source: str | None
@@ -164,6 +168,7 @@ def add_vocab_note(
     note["IPA"] = content.ipa
     note["SenseLabel"] = content.sense_label
     note["Collocations"] = content.collocations
+    note["ExtraExamples"] = content.extra_examples
     note["Audio"] = f"[sound:{content.audio_filename}]" if content.audio_filename else ""
     note["Source"] = content.source or ""
     note["DateAdded"] = datetime.now(UTC).date().isoformat()

@@ -41,6 +41,11 @@ class TranslationResult(BaseModel):
     # `tough decision`, …). Shown on the card back; the empty default keeps
     # function words and adverbs (no idiomatic collocations) noise-free.
     collocations: list[str] = []
+    # 1–2 additional natural example sentences using the lemma in a context
+    # *different* from the source sentence. Shown on the card back beneath
+    # the source sentence (#26). Empty default for the same defensive
+    # reason as collocations.
+    extra_examples: list[str] = []
 
 
 class InventedExample(BaseModel):
@@ -75,6 +80,12 @@ of the English word in context, then return JSON:
     "reach a decision"]). Use compact phrases, not full sentences. Return an
     empty list for function words or adverbs that have no idiomatic
     collocations.
+- extra_examples: 1–2 additional natural English example sentences using the
+    lemma in a *different context* than the source sentence above (if any).
+    Vary the surrounding domain, register and inflection so the learner sees
+    the word's breadth of use, not a paraphrase of the source. Return as a
+    JSON list of strings; empty list is acceptable when no different-context
+    example fits.
 
 Word: {word}
 {sentence_block}
@@ -106,6 +117,12 @@ _VERDICT_RE = re.compile(r"\s*(YES|NO|UNCLEAR)\b")
 # very unlikely to appear inside an actual collocation.
 COLLOCATION_SEPARATOR = " · "
 
+# Extra example sentences are joined with `<br>` so Anki renders each one
+# on its own line. HTML-as-separator is acceptable because Anki fields are
+# already HTML; the cost of escaping is bigger than the cost of the
+# `<br>` leaking through to other consumers (we have none).
+EXTRA_EXAMPLE_SEPARATOR = "<br>"
+
 
 def join_collocations(items: list[str]) -> str:
     return COLLOCATION_SEPARATOR.join(items)
@@ -115,6 +132,16 @@ def split_collocations(joined: str) -> list[str]:
     if not joined:
         return []
     return joined.split(COLLOCATION_SEPARATOR)
+
+
+def join_extra_examples(items: list[str]) -> str:
+    return EXTRA_EXAMPLE_SEPARATOR.join(items)
+
+
+def split_extra_examples(joined: str) -> list[str]:
+    if not joined:
+        return []
+    return joined.split(EXTRA_EXAMPLE_SEPARATOR)
 
 
 def _sentence_block(sentence: str | None) -> str:
@@ -203,6 +230,7 @@ async def translate_with_cache(
             sense_key=cached.sense_key,
             sense_label=cached.sense_label,
             collocations=split_collocations(cached.collocations),
+            extra_examples=split_extra_examples(cached.extra_examples),
         )
 
     result = await gemini.translate(word=request.word, sentence=request.sentence)
@@ -223,6 +251,7 @@ async def translate_with_cache(
                     sense_key=result.sense_key,
                     sense_label=result.sense_label,
                     collocations=join_collocations(result.collocations),
+                    extra_examples=join_extra_examples(result.extra_examples),
                 )
             )
     except IntegrityError:

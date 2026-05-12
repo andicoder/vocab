@@ -27,6 +27,7 @@ def _content(**overrides: object) -> VocabCardContent:
         "ipa": "",
         "sense_label": "",
         "collocations": "",
+        "extra_examples": "",
         "audio_data": None,
         "audio_filename": None,
         "source": None,
@@ -218,6 +219,35 @@ async def test_back_template_shows_word_audio_and_full_sentence(tmp_path: Path):
         assert "{{Word}}" in afmt
         assert "{{Audio}}" in afmt
         assert "{{Sentence}}" in afmt
+    finally:
+        col.close()
+
+
+async def test_extra_examples_persist_to_note_and_render_on_back(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            word="take effect",
+            lemma="take effect",
+            translation="in Kraft treten",
+            extra_examples=(
+                "The law takes effect on Jan 1st.<br>When does the change take effect?"
+            ),
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note = col.get_card(card_id).note()
+        assert note["ExtraExamples"] == (
+            "The law takes effect on Jan 1st.<br>When does the change take effect?"
+        )
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        afmt = model["tmpls"][0]["afmt"]
+        assert "{{#ExtraExamples}}" in afmt and "{{/ExtraExamples}}" in afmt
+        assert "{{ExtraExamples}}" in afmt
     finally:
         col.close()
 

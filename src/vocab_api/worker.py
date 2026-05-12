@@ -12,7 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from .anki_writer import AnkiBackend
 from .audio import AudioRequest, AudioStorage, TtsClient, synthesize_with_cache
 from .cloze import mask_word_in_sentence
-from .gemini import GeminiClient, TranslationRequest, join_collocations, translate_with_cache
+from .gemini import (
+    GeminiClient,
+    TranslationRequest,
+    join_collocations,
+    join_extra_examples,
+    translate_with_cache,
+)
 from .models import Entry, User
 from .operations import ApprovalDeps, write_entry_to_anki
 
@@ -114,6 +120,7 @@ async def process_entry(
     entry.sense_key = translation.sense_key
     entry.sense_label = translation.sense_label or None
     entry.collocations = join_collocations(translation.collocations) or None
+    entry.extra_examples = join_extra_examples(translation.extra_examples) or None
     entry.audio_url = audio_url
 
     if verdict == "YES":
