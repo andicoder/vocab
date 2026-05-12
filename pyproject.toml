@@ -44,17 +44,26 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-# PLR0913: too many arguments (default max-args=5). Bundle related collaborators
-# into dataclasses or pydantic models instead of growing the parameter list.
-select = ["E", "F", "I", "B", "UP", "N", "SIM", "PLR0913"]
+# Size-limit rules are documented in CLAUDE.md under "Code size limits".
+# - PLR0913: max function arguments (default max-args=5). Bundle related
+#   collaborators into dataclasses or pydantic models.
+# - PLR0915: max statements per function (override below to 30). Body > 30
+#   statements almost always means the function is doing more than one thing.
+# - PLR0911/PLR0912: max return points / branches per function. Defaults.
+# - C901: max cyclomatic complexity (default 10).
+select = ["E", "F", "I", "B", "UP", "N", "SIM", "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915"]
+
+[tool.ruff.lint.pylint]
+max-statements = 30
 
 [tool.ruff.lint.per-file-ignores]
 # FastAPI route handlers receive their dependencies as parameters — that is the
 # framework's intended pattern, so the param-count rule does not apply there.
 "src/vocab_api/routes/*.py" = ["PLR0913"]
 # Test fixtures sometimes need many setup args; keeping tests readable trumps
-# the rule.
-"tests/*.py" = ["PLR0913"]
+# the rule. Tests also exercise branchy fixture builders; we trust readability
+# of the test body over the strict complexity ceiling for non-production code.
+"tests/*.py" = ["PLR0913", "PLR0911", "PLR0912", "PLR0915", "C901"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

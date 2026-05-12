@@ -239,57 +239,82 @@ def _migrate_notetype(
 ) -> None:
     """Bring an existing 'Vocab' notetype up to the current field+template spec.
 
-    Called on every write, so it must be idempotent and cheap when there's
-    nothing to do. Missing fields get appended (Anki forbids removing fields
-    that already hold data, and we don't need to). Templates that the user
-    wants but don't exist yet get added; templates the user no longer wants
-    are KEPT — removing them would delete every card generated from that
-    template in the user's collection. Direction can only be expanded
-    safely; shrinking requires a manual edit in Anki's notetype manager."""
-    existing_field_names = {f["name"] for f in model["flds"]}
-    added_field = False
-    for field_name in VOCAB_FIELDS:
-        if field_name not in existing_field_names:
-            col.models.add_field(model, col.models.new_field(field_name))
-            added_field = True
+    Idempotent — called on every write. Templates the user no longer wants
+    are KEPT (removing them would delete every card generated from that
+    template in their collection); direction can only be expanded safely."""
+    changed = _add_missing_fields(col, model)
+    changed = _rename_legacy_templates(model) or changed
+    changed = _sync_templates(col, model, direction=direction, lang=lang) or changed
+    if changed:
+        col.models.update_dict(model)
 
+
+def _add_missing_fields(col: Collection, model: dict[str, Any]) -> bool:
+    existing = {f["name"] for f in model["flds"]}
+    added = False
+    for field_name in VOCAB_FIELDS:
+        if field_name not in existing:
+            col.models.add_field(model, col.models.new_field(field_name))
+            added = True
+    return added
+
+
+def _rename_legacy_templates(model: dict[str, Any]) -> bool:
     # Pre-#25 collections name the production template "Card 1". Renaming is
     # safe (cards stay attached) and gives a consistent look across freshly
     # created and migrated notetypes.
-    legacy_renamed = False
+    renamed = False
     for template in model["tmpls"]:
         if template["name"] == "Card 1":
             template["name"] = _NAME_DE_EN
-            legacy_renamed = True
+            renamed = True
+    return renamed
 
-    wanted = _wanted_templates(direction)
-    existing_template_names = {t["name"] for t in model["tmpls"]}
-    template_added = False
-    template_refreshed = False
 
-    for name, qfmt, afmt in wanted:
+def _sync_templates(
+    col: Collection, model: dict[str, Any], *, direction: CardDirection, lang: str
+) -> bool:
+    existing_names = {t["name"] for t in model["tmpls"]}
+    changed = False
+    for name, qfmt, afmt in _wanted_templates(direction):
+        # `col.decks.id()` creates the deck if it doesn't exist and only
+        # returns None on hard failure; pin the type for downstream helpers.
         deck_id = col.decks.id(deck_name_for(lang=lang, template_name=name))
-        if name in existing_template_names:
-            for tmpl in model["tmpls"]:
-                if tmpl["name"] == name:
-                    if tmpl["qfmt"] != qfmt or tmpl["afmt"] != afmt:
-                        tmpl["qfmt"] = qfmt
-                        tmpl["afmt"] = afmt
-                        template_refreshed = True
-                    # Always re-pin `did` so a language switch on the user's
-                    # account routes future cards into the new subdeck.
-                    # Existing cards keep their deck — Anki sets the card's
-                    # deck at creation time, not by re-reading the template.
-                    if tmpl.get("did") != deck_id:
-                        tmpl["did"] = deck_id
-                        template_refreshed = True
+        assert deck_id is not None
+        if name in existing_names:
+            changed = _refresh_template(model, name, qfmt, afmt, deck_id) or changed
         else:
-            tmpl = col.models.new_template(name)
+            _add_template(col, model, name, qfmt, afmt, deck_id)
+            changed = True
+    return changed
+
+
+def _refresh_template(  # noqa: PLR0913 — five small scalars are clearer here than a tuple
+    model: dict[str, Any], name: str, qfmt: str, afmt: str, deck_id: int
+) -> bool:
+    for tmpl in model["tmpls"]:
+        if tmpl["name"] != name:
+            continue
+        changed = False
+        if tmpl["qfmt"] != qfmt or tmpl["afmt"] != afmt:
             tmpl["qfmt"] = qfmt
             tmpl["afmt"] = afmt
+            changed = True
+        # Always re-pin `did` so a language switch on the user's account
+        # routes future cards into the new subdeck. Existing cards keep their
+        # deck — Anki sets the card's deck at creation time.
+        if tmpl.get("did") != deck_id:
             tmpl["did"] = deck_id
-            col.models.add_template(model, tmpl)
-            template_added = True
+            changed = True
+        return changed
+    return False
 
-    if added_field or legacy_renamed or template_added or template_refreshed:
-        col.models.update_dict(model)
+
+def _add_template(  # noqa: PLR0913 — five small scalars are clearer here than a tuple
+    col: Collection, model: dict[str, Any], name: str, qfmt: str, afmt: str, deck_id: int
+) -> None:
+    tmpl = col.models.new_template(name)
+    tmpl["qfmt"] = qfmt
+    tmpl["afmt"] = afmt
+    tmpl["did"] = deck_id
+    col.models.add_template(model, tmpl)
