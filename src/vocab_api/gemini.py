@@ -37,6 +37,10 @@ class TranslationResult(BaseModel):
     # a short German hint shown on the card.
     sense_key: str = "default"
     sense_label: str = ""
+    # 2–4 typical collocations the lemma appears in (`make a decision`,
+    # `tough decision`, …). Shown on the card back; the empty default keeps
+    # function words and adverbs (no idiomatic collocations) noise-free.
+    collocations: list[str] = []
 
 
 class InventedExample(BaseModel):
@@ -66,6 +70,11 @@ of the English word in context, then return JSON:
     Use the SAME slug whenever the same meaning recurs.
 - sense_label: short German hint that disambiguates this meaning from others
     (e.g. "sportlich", "Reise", "Eisenbahn"). May be empty for monosemous words.
+- collocations: 2–4 typical English collocations the lemma appears in, as a JSON
+    list of short phrases (e.g. ["make a decision", "tough decision",
+    "reach a decision"]). Use compact phrases, not full sentences. Return an
+    empty list for function words or adverbs that have no idiomatic
+    collocations.
 
 Word: {word}
 {sentence_block}
@@ -90,6 +99,22 @@ Lemma: {lemma}
 """
 
 _VERDICT_RE = re.compile(r"\s*(YES|NO|UNCLEAR)\b")
+
+# `COLLOCATION_SEPARATOR` is the on-card display separator and also the
+# delimiter we use to flatten the list before persisting (translation cache,
+# entry column). Picked for readability on small phone screens and for being
+# very unlikely to appear inside an actual collocation.
+COLLOCATION_SEPARATOR = " · "
+
+
+def join_collocations(items: list[str]) -> str:
+    return COLLOCATION_SEPARATOR.join(items)
+
+
+def split_collocations(joined: str) -> list[str]:
+    if not joined:
+        return []
+    return joined.split(COLLOCATION_SEPARATOR)
 
 
 def _sentence_block(sentence: str | None) -> str:
@@ -177,6 +202,7 @@ async def translate_with_cache(
             ipa=cached.ipa,
             sense_key=cached.sense_key,
             sense_label=cached.sense_label,
+            collocations=split_collocations(cached.collocations),
         )
 
     result = await gemini.translate(word=request.word, sentence=request.sentence)
@@ -196,6 +222,7 @@ async def translate_with_cache(
                     ipa=result.ipa,
                     sense_key=result.sense_key,
                     sense_label=result.sense_label,
+                    collocations=join_collocations(result.collocations),
                 )
             )
     except IntegrityError:

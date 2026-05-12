@@ -31,6 +31,7 @@ async def test_translate_returns_parsed_result():
             "ipa": "/ˌɛkspɪˈdɪʃən/",
             "sense_key": "noun-journey",
             "sense_label": "Reise",
+            "collocations": ["go on an expedition", "Arctic expedition", "lead an expedition"],
         }
     )
 
@@ -50,11 +51,75 @@ async def test_translate_returns_parsed_result():
         ipa="/ˌɛkspɪˈdɪʃən/",
         sense_key="noun-journey",
         sense_label="Reise",
+        collocations=["go on an expedition", "Arctic expedition", "lead an expedition"],
     )
     # Defend against pydantic silently ignoring unknown fields — these must
-    # actually be present on the model after #24.
+    # actually be present on the model after #24 / #27.
     assert result.sense_key == "noun-journey"
     assert result.sense_label == "Reise"
+    assert result.collocations == [
+        "go on an expedition",
+        "Arctic expedition",
+        "lead an expedition",
+    ]
+
+
+async def test_translate_defaults_collocations_to_empty_list_when_omitted():
+    # Real Gemini responses are noisy; treat a missing field as "no
+    # collocations" rather than a hard failure so the worker can still
+    # ship the card.
+    payload = json.dumps(
+        {
+            "lemma": "x",
+            "translation": "y",
+            "alternatives": "",
+            "ipa": "",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    client, http = _make_client(handler)
+    try:
+        result = await client.translate(word="x", sentence=None)
+    finally:
+        await http.aclose()
+
+    assert result.collocations == []
+
+
+async def test_translate_prompt_asks_for_collocations():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_gemini_response(
+                json.dumps(
+                    {
+                        "lemma": "decision",
+                        "translation": "die Entscheidung",
+                        "alternatives": "",
+                        "ipa": "",
+                        "collocations": [],
+                    }
+                )
+            ),
+        )
+
+    client, http = _make_client(handler)
+    try:
+        await client.translate(word="decision", sentence=None)
+    finally:
+        await http.aclose()
+
+    prompt = captured["body"]["contents"][0]["parts"][0]["text"]
+    assert "collocations" in prompt
+    # The prompt should anchor the shape with at least one example collocation
+    # so the model doesn't return single-word entries.
+    assert "make a decision" in prompt
 
 
 async def test_translate_prompt_asks_for_sense_key_and_label():

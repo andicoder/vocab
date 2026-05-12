@@ -26,6 +26,7 @@ def _content(**overrides: object) -> VocabCardContent:
         "alternatives": "",
         "ipa": "",
         "sense_label": "",
+        "collocations": "",
         "audio_data": None,
         "audio_filename": None,
         "source": None,
@@ -217,6 +218,33 @@ async def test_back_template_shows_word_audio_and_full_sentence(tmp_path: Path):
         assert "{{Word}}" in afmt
         assert "{{Audio}}" in afmt
         assert "{{Sentence}}" in afmt
+    finally:
+        col.close()
+
+
+async def test_collocations_persist_to_note_and_render_on_back(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            word="decision",
+            lemma="decision",
+            translation="die Entscheidung",
+            collocations="make a decision · tough decision · reach a decision",
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note = col.get_card(card_id).note()
+        assert note["Collocations"] == ("make a decision · tough decision · reach a decision")
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        afmt = model["tmpls"][0]["afmt"]
+        # Anki's conditional rendering hides the block for monosemous words
+        # so the back has no empty line where collocations would be.
+        assert "{{#Collocations}}" in afmt and "{{/Collocations}}" in afmt
+        assert "{{Collocations}}" in afmt
     finally:
         col.close()
 

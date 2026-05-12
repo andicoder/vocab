@@ -733,6 +733,61 @@ async def test_cloze_sentence_invented_when_word_not_in_source_sentence(
     assert entry.sentence == "Dozens turned up at the door."
 
 
+async def test_process_entry_persists_joined_collocations(db_session: AsyncSession, tmp_path: Path):
+    user, entry = await _make_pending_entry(db_session)
+    payload = {
+        **_TRANSLATE_PAYLOAD,
+        "collocations": ["go on an expedition", "Arctic expedition", "lead an expedition"],
+    }
+    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.collocations == ("go on an expedition · Arctic expedition · lead an expedition")
+
+
+async def test_process_entry_leaves_collocations_null_when_gemini_returns_empty(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # Function words / adverbs typically have no idiomatic collocations.
+    # Storing empty as NULL keeps the column meaningful (NULL = "no
+    # collocations for this lemma") rather than rendering an empty block on
+    # the card.
+    user, entry = await _make_pending_entry(db_session, word="however")
+    payload = {
+        "lemma": "however",
+        "translation": "jedoch",
+        "alternatives": "allerdings",
+        "ipa": "",
+        "collocations": [],
+    }
+    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.collocations is None
+
+
 async def test_polyseme_same_lemma_different_sense_is_kept_as_separate_card(
     db_session: AsyncSession, tmp_path: Path
 ):

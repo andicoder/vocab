@@ -72,6 +72,10 @@ class Entry(Base):
         String, nullable=False, default="default", server_default="default"
     )
     sense_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 2–4 typical collocations the lemma appears in (#27). Stored " · "-joined
+    # so the Anki template can render it directly; NULL when Gemini returns
+    # an empty list (function words, adverbs).
+    collocations: Mapped[str | None] = mapped_column(Text, nullable=True)
     lang: Mapped[str] = mapped_column(String, nullable=False, default="en", server_default="en")
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending", server_default="pending"
@@ -111,6 +115,7 @@ class TranslationCache(Base):
         Text, nullable=False, default="default", server_default="default"
     )
     sense_label: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    collocations: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
