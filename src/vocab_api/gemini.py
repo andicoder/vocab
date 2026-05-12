@@ -33,6 +33,16 @@ class TranslationResult(BaseModel):
     ipa: str
 
 
+class InventedExample(BaseModel):
+    """A self-generated example sentence and its cloze (gap) variant.
+
+    Used when an entry has no user-supplied source sentence — we still
+    want a contextual gap sentence on the front of the card."""
+
+    sentence: str
+    cloze_sentence: str
+
+
 _TRANSLATE_PROMPT = """\
 Translate the following English word to German for a vocabulary flashcard.
 Use the sentence to determine the part of speech of the English word, then return JSON:
@@ -57,6 +67,15 @@ German translation: {translation}
 {sentence_block}
 """
 
+_INVENT_EXAMPLE_PROMPT = """\
+Invent a short, natural English example sentence (≤ 15 words) that uses the
+given lemma in a clear, idiomatic context. Then return JSON:
+- sentence: the example sentence, using whatever inflection of the lemma fits the sentence
+- cloze_sentence: the same sentence with the inflected lemma replaced by ___
+
+Lemma: {lemma}
+"""
+
 _VERDICT_RE = re.compile(r"\s*(YES|NO|UNCLEAR)\b")
 
 
@@ -75,6 +94,11 @@ class GeminiClient:
         prompt = _TRANSLATE_PROMPT.format(word=word, sentence_block=_sentence_block(sentence))
         text = await self._generate(prompt, response_mime_type="application/json")
         return TranslationResult.model_validate(json.loads(text))
+
+    async def invent_example(self, *, lemma: str) -> InventedExample:
+        prompt = _INVENT_EXAMPLE_PROMPT.format(lemma=lemma)
+        text = await self._generate(prompt, response_mime_type="application/json")
+        return InventedExample.model_validate(json.loads(text))
 
     async def plausibility(
         self,
