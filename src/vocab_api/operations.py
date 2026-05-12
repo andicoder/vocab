@@ -65,7 +65,7 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
     )
     direction = cast(CardDirection, user.card_direction)
     card_id = await deps.anki_writer.write_card(
-        username=user.username, content=content, direction=direction
+        username=user.username, content=content, direction=direction, lang=entry.lang
     )
 
     now = datetime.now(UTC)

@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     # Contended in production because anki-sync-server keeps the file open
     # at the Anki Rust backend level (#5).
     anki_collection_root: str = "./var/anki"
-    anki_deck_name: str = "Default"
 
     # HTTP sync path (production). When `anki_sync_url` is set, the app
     # opens a private "shadow" collection under `anki_shadow_root` per user

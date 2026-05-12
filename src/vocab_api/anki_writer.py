@@ -29,6 +29,26 @@ CardDirection = Literal["de_en", "en_de", "both"]
 _NAME_DE_EN = "DE→EN"
 _NAME_EN_DE = "EN→DE"
 
+# German display names per source language. New entries land under
+# `{LANGUAGE}::{DIRECTION}` so reviews can be paced per (lang, direction).
+# Unknown codes fall back to the uppercase ISO tag (e.g. `tlh → TLH::…`)
+# rather than crashing the writer.
+_LANG_DISPLAY_NAMES_DE = {
+    "en": "Englisch",
+    "es": "Spanisch",
+    "nl": "Niederländisch",
+    "fr": "Französisch",
+    "it": "Italienisch",
+    "pt": "Portugiesisch",
+    "hr": "Kroatisch",
+}
+
+
+def deck_name_for(*, lang: str, template_name: str) -> str:
+    parent = _LANG_DISPLAY_NAMES_DE.get(lang, lang.upper())
+    return f"{parent}::{template_name}"
+
+
 # Anki's conditional field rendering `{{#SenseLabel}}…{{/SenseLabel}}` shows
 # the inner block only when SenseLabel is non-empty — so monosemous words
 # render as "(die Bank)" rather than "(die Bank, )".
@@ -103,6 +123,7 @@ class AnkiBackend(Protocol):
         username: str,
         content: VocabCardContent,
         direction: CardDirection = "de_en",
+        lang: str = "en",
     ) -> int: ...
 
 
@@ -114,18 +135,20 @@ def write_media_file(media_dir: Path, content: VocabCardContent) -> None:
 
 def add_vocab_note(
     col: Collection,
-    deck_name: str,
     content: VocabCardContent,
     *,
     direction: CardDirection = "de_en",
+    lang: str = "en",
 ) -> int:
     """Adds a Vocab note to `col` and returns the resulting card id.
 
     Caller is responsible for the Collection lifecycle (open/close) and
     for placing audio media bytes in the collection's media directory."""
-    model = _ensure_notetype(col, direction=direction)
-    deck_id = col.decks.id(deck_name)
-    assert deck_id is not None
+    model = _ensure_notetype(col, direction=direction, lang=lang)
+    # Each template owns its `did`; the note's own deck_id only matters as
+    # a fallback for templates without one. Use the first template's deck
+    # so the note has a sensible "home" in Anki's browse view.
+    home_deck_id = model["tmpls"][0]["did"]
 
     note = col.new_note(model)
     note["Word"] = content.word
@@ -140,7 +163,7 @@ def add_vocab_note(
     note["Source"] = content.source or ""
     note["DateAdded"] = datetime.now(UTC).date().isoformat()
 
-    col.add_note(note, deck_id=deck_id)
+    col.add_note(note, deck_id=home_deck_id)
     card_ids = col.find_cards(f"nid:{note.id}")
     return int(card_ids[0])
 
@@ -151,9 +174,8 @@ class AnkiWriter:
     Used in tests/dev. In production it conflicts with anki-sync-server
     holding the same file open — switch to AnkiSyncWriter there."""
 
-    def __init__(self, *, root: Path, deck_name: str = "Default") -> None:
+    def __init__(self, *, root: Path) -> None:
         self._root = root
-        self._deck_name = deck_name
 
     def collection_path(self, username: str) -> Path:
         return self._root / username / "collection.anki2"
@@ -167,13 +189,14 @@ class AnkiWriter:
         username: str,
         content: VocabCardContent,
         direction: CardDirection = "de_en",
+        lang: str = "en",
     ) -> int:
         # The anki package opens a SQLite Collection synchronously through a
         # Rust backend; running it on the event loop would block other I/O.
-        return await asyncio.to_thread(self._write_sync, username, content, direction)
+        return await asyncio.to_thread(self._write_sync, username, content, direction, lang)
 
     def _write_sync(
-        self, username: str, content: VocabCardContent, direction: CardDirection
+        self, username: str, content: VocabCardContent, direction: CardDirection, lang: str
     ) -> int:
         col_path = self.collection_path(username)
         col_path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,20 +204,22 @@ class AnkiWriter:
 
         col = Collection(str(col_path))
         try:
-            return add_vocab_note(col, self._deck_name, content, direction=direction)
+            return add_vocab_note(col, content, direction=direction, lang=lang)
         finally:
             col.close()
 
 
-def _ensure_notetype(col: Collection, *, direction: CardDirection = "de_en") -> dict[str, Any]:
+def _ensure_notetype(
+    col: Collection, *, direction: CardDirection = "de_en", lang: str = "en"
+) -> dict[str, Any]:
     existing = col.models.by_name(VOCAB_NOTETYPE)
     if existing is None:
-        return _create_notetype(col, direction=direction)
-    _migrate_notetype(col, existing, direction=direction)
+        return _create_notetype(col, direction=direction, lang=lang)
+    _migrate_notetype(col, existing, direction=direction, lang=lang)
     return existing
 
 
-def _create_notetype(col: Collection, *, direction: CardDirection) -> dict[str, Any]:
+def _create_notetype(col: Collection, *, direction: CardDirection, lang: str) -> dict[str, Any]:
     model = col.models.new(VOCAB_NOTETYPE)
     for field_name in VOCAB_FIELDS:
         col.models.add_field(model, col.models.new_field(field_name))
@@ -203,12 +228,15 @@ def _create_notetype(col: Collection, *, direction: CardDirection) -> dict[str, 
         template = col.models.new_template(name)
         template["qfmt"] = qfmt
         template["afmt"] = afmt
+        template["did"] = col.decks.id(deck_name_for(lang=lang, template_name=name))
         col.models.add_template(model, template)
     col.models.add(model)
     return model
 
 
-def _migrate_notetype(col: Collection, model: dict[str, Any], *, direction: CardDirection) -> None:
+def _migrate_notetype(
+    col: Collection, model: dict[str, Any], *, direction: CardDirection, lang: str
+) -> None:
     """Bring an existing 'Vocab' notetype up to the current field+template spec.
 
     Called on every write, so it must be idempotent and cheap when there's
@@ -240,16 +268,26 @@ def _migrate_notetype(col: Collection, model: dict[str, Any], *, direction: Card
     template_refreshed = False
 
     for name, qfmt, afmt in wanted:
+        deck_id = col.decks.id(deck_name_for(lang=lang, template_name=name))
         if name in existing_template_names:
             for tmpl in model["tmpls"]:
-                if tmpl["name"] == name and (tmpl["qfmt"] != qfmt or tmpl["afmt"] != afmt):
-                    tmpl["qfmt"] = qfmt
-                    tmpl["afmt"] = afmt
-                    template_refreshed = True
+                if tmpl["name"] == name:
+                    if tmpl["qfmt"] != qfmt or tmpl["afmt"] != afmt:
+                        tmpl["qfmt"] = qfmt
+                        tmpl["afmt"] = afmt
+                        template_refreshed = True
+                    # Always re-pin `did` so a language switch on the user's
+                    # account routes future cards into the new subdeck.
+                    # Existing cards keep their deck — Anki sets the card's
+                    # deck at creation time, not by re-reading the template.
+                    if tmpl.get("did") != deck_id:
+                        tmpl["did"] = deck_id
+                        template_refreshed = True
         else:
             tmpl = col.models.new_template(name)
             tmpl["qfmt"] = qfmt
             tmpl["afmt"] = afmt
+            tmpl["did"] = deck_id
             col.models.add_template(model, tmpl)
             template_added = True
 

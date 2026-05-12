@@ -40,9 +40,8 @@ def _make_anki_backend() -> AnkiBackend:
             shadow_root=Path(settings.anki_shadow_root),
             sync_endpoint=settings.anki_sync_url,
             credentials=parse_credentials_json(settings.anki_sync_credentials_json),
-            deck_name=settings.anki_deck_name,
         )
-    return AnkiWriter(root=Path(settings.anki_collection_root), deck_name=settings.anki_deck_name)
+    return AnkiWriter(root=Path(settings.anki_collection_root))
 
 
 @asynccontextmanager
