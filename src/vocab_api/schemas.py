@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,3 +29,13 @@ class EntryRead(BaseModel):
     created_at: datetime
     approved_at: datetime | None
     synced_at: datetime | None
+
+
+class SettingsRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    card_direction: Literal["de_en", "en_de", "both"]
+
+
+class SettingsUpdate(BaseModel):
+    card_direction: Literal["de_en", "en_de", "both"] | None = None

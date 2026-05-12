@@ -48,6 +48,34 @@ def test_translate_route_requires_auth(http_client: TestClient):
     assert response.status_code == 401
 
 
+def test_settings_get_returns_default_card_direction(http_client: TestClient):
+    response = http_client.get("/me/settings", headers={"X-authentik-username": "alice"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"card_direction": "de_en"}
+
+
+def test_settings_patch_updates_card_direction(http_client: TestClient):
+    response = http_client.patch(
+        "/me/settings",
+        json={"card_direction": "both"},
+        headers={"X-authentik-username": "alice"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"card_direction": "both"}
+    # Persisted: a follow-up GET reflects the new value.
+    response = http_client.get("/me/settings", headers={"X-authentik-username": "alice"})
+    assert response.json() == {"card_direction": "both"}
+
+
+def test_settings_patch_rejects_unknown_direction(http_client: TestClient):
+    response = http_client.patch(
+        "/me/settings",
+        json={"card_direction": "es_de"},
+        headers={"X-authentik-username": "alice"},
+    )
+    assert response.status_code == 422
+
+
 def test_translate_route_returns_translation(http_client: TestClient):
     payload = {
         "lemma": "expedition",
