@@ -15,13 +15,18 @@ VOCAB_FIELDS = [
     "Translation",
     "Alternatives",
     "IPA",
+    "SenseLabel",
     "Audio",
     "Source",
     "DateAdded",
 ]
 
+# Anki's conditional field rendering `{{#SenseLabel}}…{{/SenseLabel}}` shows
+# the inner block only when SenseLabel is non-empty — so monosemous words
+# render as "(die Bank)" rather than "(die Bank, )".
 _FRONT_TEMPLATE = (
-    '<div class="cloze-sentence">{{ClozeSentence}}</div><div class="hint">({{Translation}})</div>'
+    '<div class="cloze-sentence">{{ClozeSentence}}</div>'
+    '<div class="hint">({{Translation}}{{#SenseLabel}}, {{SenseLabel}}{{/SenseLabel}})</div>'
 )
 _BACK_TEMPLATE = (
     "{{FrontSide}}<hr>"
@@ -45,6 +50,7 @@ class VocabCardContent:
     translation: str
     alternatives: str
     ipa: str
+    sense_label: str
     audio_data: bytes | None
     audio_filename: str | None
     source: str | None
@@ -85,6 +91,7 @@ def add_vocab_note(col: Collection, deck_name: str, content: VocabCardContent) -
     note["Translation"] = content.translation
     note["Alternatives"] = content.alternatives
     note["IPA"] = content.ipa
+    note["SenseLabel"] = content.sense_label
     note["Audio"] = f"[sound:{content.audio_filename}]" if content.audio_filename else ""
     note["Source"] = content.source or ""
     note["DateAdded"] = datetime.now(UTC).date().isoformat()

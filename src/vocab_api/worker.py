@@ -73,16 +73,24 @@ async def process_entry(
 
     # Kindle imports often produce two surface forms of one lemma (e.g.
     # "dozens" + "dozen"). Drop the second one before it hits
-    # uq_entry_user_lemma_lang at commit time and triggers an infinite
-    # worker retry (#10).
-    if await _lemma_already_exists(
-        session, user_id=user.id, lemma=translation.lemma, lang=entry.lang, exclude_id=entry.id
+    # uq_entry_user_lemma_lang_sense at commit time and triggers an infinite
+    # worker retry (#10). Since #24 the duplicate guard is per-sense — the
+    # same lemma can legitimately land twice as long as the sense_key
+    # differs (`train` as verb vs. as noun).
+    if await _sense_already_exists(
+        session,
+        user_id=user.id,
+        lemma=translation.lemma,
+        lang=entry.lang,
+        sense_key=translation.sense_key,
+        exclude_id=entry.id,
     ):
         log.info(
-            "dropped duplicate-lemma entry id=%s user=%s lemma=%s",
+            "dropped duplicate-sense entry id=%s user=%s lemma=%s sense=%s",
             entry.id,
             user.id,
             translation.lemma,
+            translation.sense_key,
         )
         await session.delete(entry)
         return translation.lemma
@@ -103,6 +111,8 @@ async def process_entry(
     entry.translation = translation.translation
     entry.alternatives = translation.alternatives
     entry.ipa = translation.ipa
+    entry.sense_key = translation.sense_key
+    entry.sense_label = translation.sense_label or None
     entry.audio_url = audio_url
 
     if verdict == "YES":
@@ -153,12 +163,13 @@ async def _populate_cloze(entry: Entry, *, gemini: GeminiClient, lemma: str) -> 
     entry.cloze_sentence = invented.cloze_sentence
 
 
-async def _lemma_already_exists(
+async def _sense_already_exists(  # noqa: PLR0913 — six narrow scalars are clearer than a one-call-site dataclass
     session: AsyncSession,
     *,
     user_id: int,
     lemma: str,
     lang: str,
+    sense_key: str,
     exclude_id: int,
 ) -> bool:
     stmt = (
@@ -167,6 +178,7 @@ async def _lemma_already_exists(
             Entry.user_id == user_id,
             Entry.lemma == lemma,
             Entry.lang == lang,
+            Entry.sense_key == sense_key,
             Entry.id != exclude_id,
         )
         .limit(1)
