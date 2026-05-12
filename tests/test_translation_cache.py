@@ -136,6 +136,107 @@ async def test_cache_distinguishes_by_sentence(db_session: AsyncSession):
     assert len(rows) == 2
 
 
+async def test_cache_row_with_empty_collocations_and_extras_is_treated_as_miss(
+    db_session: AsyncSession,
+):
+    # Regression for #43: the migrations that added `collocations` and
+    # `extra_examples` to translation_cache backfilled existing rows
+    # with `''` (NOT NULL DEFAULT ''). Treating such a row as a cache
+    # hit would permanently shadow Gemini's new behavior for the
+    # affected words. The reader skips these rows so they get
+    # overwritten on the next translate.
+    db_session.add(
+        TranslationCache(
+            word="expedition",
+            sentence_hash=None,
+            lang="en",
+            lemma="expedition",
+            translation="STALE",
+            alternatives="",
+            ipa="",
+            collocations="",
+            extra_examples="",
+        )
+    )
+    await db_session.flush()
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = json.dumps(
+            {
+                "lemma": "expedition",
+                "translation": "die Expedition",
+                "alternatives": "",
+                "ipa": "/ˌɛkspɪˈdɪʃən/",
+                "collocations": ["go on an expedition"],
+                "extra_examples": ["She joined an expedition to the Amazon."],
+            }
+        )
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    gemini, http = _client(handler)
+    try:
+        result = await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="expedition", sentence=None),
+        )
+    finally:
+        await http.aclose()
+
+    assert calls == 1, "stale cache row should not have short-circuited Gemini"
+    assert result.translation == "die Expedition"
+    assert result.collocations == ["go on an expedition"]
+
+
+async def test_cache_row_with_only_one_field_populated_still_hits(
+    db_session: AsyncSession,
+):
+    # Rows that have at least one of collocations / extra_examples
+    # populated are considered fresh — they came from the post-#26/#27
+    # worker. Re-querying every time would defeat the cache.
+    db_session.add(
+        TranslationCache(
+            word="however",
+            sentence_hash=None,
+            lang="en",
+            lemma="however",
+            translation="jedoch",
+            alternatives="allerdings",
+            ipa="",
+            collocations="",
+            extra_examples="However, the plan succeeded.",
+        )
+    )
+    await db_session.flush()
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=_gemini_response(_payload()))
+
+    gemini, http = _client(handler)
+    try:
+        result = await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="however", sentence=None),
+        )
+    finally:
+        await http.aclose()
+
+    assert calls == 0
+    assert result.translation == "jedoch"
+    assert result.extra_examples == ["However, the plan succeeded."]
+
+
 async def test_cache_with_no_sentence_uses_null_hash(db_session: AsyncSession):
     calls = 0
 
