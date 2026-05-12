@@ -430,7 +430,7 @@ async def test_both_direction_creates_two_templates(tmp_path: Path):
         assert names == ["DE→EN", "EN→DE"]
         # EN→DE template shows the bare word on the front.
         en_de = model["tmpls"][1]
-        assert en_de["qfmt"].strip() == '<div class="word">{{Word}}</div>'
+        assert en_de["qfmt"].strip() == "<h2>{{Word}}</h2>{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
         assert "{{Translation}}" in en_de["afmt"]
     finally:
         col.close()

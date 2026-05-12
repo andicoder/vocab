@@ -51,38 +51,46 @@ def deck_name_for(*, lang: str, template_name: str) -> str:
     return f"{parent}::{template_name}"
 
 
-# Anki's conditional field rendering `{{#SenseLabel}}…{{/SenseLabel}}` shows
-# the inner block only when SenseLabel is non-empty — so monosemous words
-# render as "(die Bank)" rather than "(die Bank, )".
+# Semantic HTML so Anki's default CSS already produces a readable
+# hierarchy (no shipped CSS in the notetype; users can layer their own
+# styles through the notetype's Styling tab and `_refresh_template`
+# never touches `model['css']`). No section labels — visual cues
+# (quotes, italics, small caps, `<hr>`) carry the structure (#46).
 _FRONT_DE_EN = (
-    '<div class="cloze-sentence">{{ClozeSentence}}</div>'
-    '<div class="hint">({{Translation}}{{#SenseLabel}}, {{SenseLabel}}{{/SenseLabel}})</div>'
+    "<p>{{ClozeSentence}}</p>"
+    "<p><small>"
+    "({{Translation}}{{#SenseLabel}}, {{SenseLabel}}{{/SenseLabel}})"
+    "</small></p>"
 )
 _BACK_DE_EN = (
     "{{FrontSide}}<hr>"
-    '<div class="word">{{Word}}</div>'
+    "<h2>{{Word}}</h2>"
+    "{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
     "{{Audio}}"
-    '<div class="sentence">{{Sentence}}</div>'
-    '{{#ExtraExamples}}<div class="extra-examples">{{ExtraExamples}}</div>{{/ExtraExamples}}'
-    '{{#Collocations}}<div class="collocations">{{Collocations}}</div>{{/Collocations}}'
-    '<div class="alternatives">{{Alternatives}}</div>'
-    '<div class="ipa">{{IPA}}</div>'
-    '<div class="source">{{Source}}</div>'
+    "<p><strong>{{Translation}}</strong>"
+    "{{#SenseLabel}} <em>({{SenseLabel}})</em>{{/SenseLabel}}"
+    "</p>"
+    "{{#Alternatives}}<p><small><em>{{Alternatives}}</em></small></p>{{/Alternatives}}"
+    '<p><em>„{{Sentence}}"</em></p>'
+    "{{#ExtraExamples}}<p>{{ExtraExamples}}</p>{{/ExtraExamples}}"
+    "{{#Collocations}}<p><small>{{Collocations}}</small></p>{{/Collocations}}"
+    "{{#Source}}<p><small>{{Source}}</small></p>{{/Source}}"
 )
 
-# Recognition direction: bare word on the front, German translation +
-# everything else on the back. Audio on the back too, so listening
-# always follows the recall attempt regardless of direction.
-_FRONT_EN_DE = '<div class="word">{{Word}}</div>'
+# Recognition direction: word + IPA on the front, translation + supporting
+# context on the back. Audio on the back so listening always follows the
+# recall attempt regardless of direction.
+_FRONT_EN_DE = "<h2>{{Word}}</h2>{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
 _BACK_EN_DE = (
     "{{FrontSide}}<hr>"
-    '<div class="translation">{{Translation}}{{#SenseLabel}}, {{SenseLabel}}{{/SenseLabel}}</div>'
+    "<p><strong>{{Translation}}</strong>"
+    "{{#SenseLabel}} <em>({{SenseLabel}})</em>{{/SenseLabel}}"
+    "</p>"
     "{{Audio}}"
-    '<div class="sentence">{{Sentence}}</div>'
-    '{{#ExtraExamples}}<div class="extra-examples">{{ExtraExamples}}</div>{{/ExtraExamples}}'
-    '{{#Collocations}}<div class="collocations">{{Collocations}}</div>{{/Collocations}}'
-    '<div class="alternatives">{{Alternatives}}</div>'
-    '<div class="ipa">{{IPA}}</div>'
+    "{{#Alternatives}}<p><small><em>{{Alternatives}}</em></small></p>{{/Alternatives}}"
+    '<p><em>„{{Sentence}}"</em></p>'
+    "{{#ExtraExamples}}<p>{{ExtraExamples}}</p>{{/ExtraExamples}}"
+    "{{#Collocations}}<p><small>{{Collocations}}</small></p>{{/Collocations}}"
 )
 
 
