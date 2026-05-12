@@ -219,6 +219,13 @@ async def translate_with_cache(
         if sh is None
         else TranslationCache.sentence_hash == sh,
         TranslationCache.lang == request.lang,
+        # Migrations 42b43fa4406f / a4eb60988a1a backfilled `collocations`
+        # and `extra_examples` on pre-existing rows with `''`. Treating such
+        # a row as a cache hit would permanently freeze the affected words
+        # at empty collocations/examples (#43). At least one of the two
+        # must be populated for a row to count as fresh; rows from the
+        # post-0.3 worker always satisfy this for any vocabulary-like word.
+        ~((TranslationCache.collocations == "") & (TranslationCache.extra_examples == "")),
     )
     cached = (await session.execute(stmt)).scalar_one_or_none()
     if cached is not None:

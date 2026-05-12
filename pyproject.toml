@@ -68,6 +68,10 @@ max-statements = 30
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Surface the 10 slowest tests on every run so a slow test is visible
+# from the regular output instead of needing a flag. Cheap to compute
+# and reading "0.4s setup foo" is enough to flag a fixture pollution.
+addopts = "--durations=10"
 
 [[tool.mypy.overrides]]
 module = ["aioboto3", "aioboto3.*", "anki", "anki.*"]
