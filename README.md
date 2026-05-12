@@ -2,7 +2,7 @@
 
 Self-hosted vocab + translator + Anki-card-builder service for the family.
 
-Collect words from any source (browser right-click, mobile share, Kindle import, manual) → translate with **Gemini Flash-Lite** (lemma, translation, alternatives, IPA, plausibility check) → generate audio via **edge-tts** → write finished cards directly into our own **Anki sync server** → all Anki devices pick them up on the next normal sync.
+Collect words from any source (browser right-click, mobile share, Kindle import, manual) → translate with **Gemini Flash-Lite** (lemma, translation, alternatives, IPA, plausibility check, per-sense disambiguation) → generate audio via **edge-tts** → write finished **active-recall cards** (gap sentence on the front, word + audio + full sentence on the back) directly into our own **Anki sync server** → all Anki devices pick them up on the next normal sync.
 
 [![CI](https://github.com/andicoder/vocab/actions/workflows/build.yml/badge.svg)](https://github.com/andicoder/vocab/actions/workflows/build.yml)
 
@@ -65,7 +65,6 @@ All runtime config flows through `vocab_api.config.Settings` (Pydantic) and is o
 | `VOCAB_S3_SECRET_KEY` | empty | S3 secret key. |
 | **Anki (file mode — dev/tests)** | | |
 | `VOCAB_ANKI_COLLECTION_ROOT` | `./var/anki` | Filesystem root containing `<user>/collection.anki2`. Used when `VOCAB_ANKI_SYNC_URL` is empty. Conflicts with anki-sync-server in production (#5). |
-| `VOCAB_ANKI_DECK_NAME` | `Default` | Deck new vocab notes are added to. |
 | **Anki (sync mode — production)** | | |
 | `VOCAB_ANKI_SYNC_URL` | empty | When set, the app uses `AnkiSyncWriter` over the Anki sync HTTP protocol against this server. |
 | `VOCAB_ANKI_SYNC_CREDENTIALS_JSON` | `{}` | JSON object mapping vocab username → anki-sync-server password (loaded once at startup). Example: `{"alice":"pw1","bob":"pw2"}`. |
@@ -78,6 +77,25 @@ VOCAB_DATABASE_URL=postgresql+asyncpg://vocab:vocab@localhost:5432/vocab
 VOCAB_GEMINI_API_KEY=your-key-here
 VOCAB_LOG_LEVEL=DEBUG
 ```
+
+## Card design
+
+Cards follow the active-recall pattern from Wozniak's *20 Rules of Formulating Knowledge*:
+
+- **Front**: the source sentence with the target word replaced by `___`, plus a short German hint that disambiguates which word is being asked for. The user has to *produce* the English word from context — recognition cards alone build no productive vocabulary.
+- **Back**: the word, audio (edge-tts), the full source sentence, alternative translations and IPA.
+
+Polysemous words (`train` = railway / to exercise) land as **one card per meaning** — Gemini emits a stable `sense_key` slug so a second encounter under a different sense creates a second card, while a second encounter under the same sense is still dropped as a duplicate.
+
+Each user picks a **card direction** via `PATCH /me/settings`:
+
+| `card_direction` | Cards per note | Recall task |
+|---|---|---|
+| `de_en` (default) | one production card | see DE hint → recall EN word |
+| `en_de` | one recognition card | see EN word → recall DE meaning |
+| `both` | both | independent review schedules per direction |
+
+New cards land in auto-named subdecks per `(source language, direction)` — e.g. `Englisch::DE→EN`, `Spanisch::EN→DE`, `Kroatisch::DE→EN`. Unknown ISO codes fall back to `UPPERCASE::DIRECTION`. Existing cards keep whichever deck they were created in.
 
 ## Browser extension
 
