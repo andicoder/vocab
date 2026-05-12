@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from vocab_api.gemini import GeminiClient, Plausibility, TranslationResult
+from vocab_api.gemini import GeminiClient, InventedExample, Plausibility, TranslationResult
 
 
 def _gemini_response(text: str) -> dict:
@@ -196,3 +196,48 @@ async def test_plausibility_unparseable_falls_back_to_unclear():
         await http.aclose()
 
     assert verdict == "UNCLEAR"
+
+
+async def test_invent_example_returns_sentence_and_cloze():
+    payload = json.dumps(
+        {
+            "sentence": "He took the train to work.",
+            "cloze_sentence": "He ___ the train to work.",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    client, http = _make_client(handler)
+    try:
+        result = await client.invent_example(lemma="take")
+    finally:
+        await http.aclose()
+
+    assert result == InventedExample(
+        sentence="He took the train to work.",
+        cloze_sentence="He ___ the train to work.",
+    )
+
+
+async def test_invent_example_prompt_includes_lemma_and_asks_for_json():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_gemini_response(json.dumps({"sentence": "x.", "cloze_sentence": "___."})),
+        )
+
+    client, http = _make_client(handler)
+    try:
+        await client.invent_example(lemma="expedition")
+    finally:
+        await http.aclose()
+
+    prompt_text = captured["body"]["contents"][0]["parts"][0]["text"]
+    assert "expedition" in prompt_text
+    assert "___" in prompt_text  # the prompt must instruct the model on the gap marker
+    assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
