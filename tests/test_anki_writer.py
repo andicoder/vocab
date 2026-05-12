@@ -253,6 +253,107 @@ async def test_front_template_renders_sense_label_when_present(tmp_path: Path):
         col.close()
 
 
+async def test_default_direction_creates_only_de_en_template(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        names = [t["name"] for t in model["tmpls"]]
+        assert names == ["DE→EN"]
+        # Sanity: this single template is the production-direction one
+        # (cloze gap on the front, word on the back).
+        assert "{{ClozeSentence}}" in model["tmpls"][0]["qfmt"]
+    finally:
+        col.close()
+
+
+async def test_both_direction_creates_two_templates(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content(), direction="both")
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        names = [t["name"] for t in model["tmpls"]]
+        assert names == ["DE→EN", "EN→DE"]
+        # EN→DE template shows the bare word on the front.
+        en_de = model["tmpls"][1]
+        assert en_de["qfmt"].strip() == '<div class="word">{{Word}}</div>'
+        assert "{{Translation}}" in en_de["afmt"]
+    finally:
+        col.close()
+
+
+async def test_en_de_only_direction_creates_only_recognition_template(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content(), direction="en_de")
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        names = [t["name"] for t in model["tmpls"]]
+        assert names == ["EN→DE"]
+    finally:
+        col.close()
+
+
+async def test_upgrading_from_de_en_to_both_adds_recognition_template(tmp_path: Path):
+    # Alice's collection starts in single-direction mode (today's default).
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content())
+    # She flips to 'both' later. The next write must add the EN→DE template
+    # idempotently without disturbing the existing DE→EN one.
+    await writer.write_card(
+        username="alice", content=_content(word="second", lemma="second"), direction="both"
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        names = [t["name"] for t in model["tmpls"]]
+        assert names == ["DE→EN", "EN→DE"]
+    finally:
+        col.close()
+
+
+async def test_legacy_card1_template_is_renamed_to_de_en(tmp_path: Path):
+    # Simulate a pre-#25 collection whose first template is still called
+    # "Card 1". The migration must rename it to "DE→EN" so behavior stays
+    # consistent across freshly-created and legacy collections.
+    writer = AnkiWriter(root=tmp_path)
+    col_path = writer.collection_path("alice")
+    col_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy = Collection(str(col_path))
+    try:
+        model = legacy.models.new(VOCAB_NOTETYPE)
+        for field_name in VOCAB_FIELDS:
+            legacy.models.add_field(model, legacy.models.new_field(field_name))
+        template = legacy.models.new_template("Card 1")
+        template["qfmt"] = "legacy {{Word}}"
+        template["afmt"] = "legacy {{Translation}}"
+        legacy.models.add_template(model, template)
+        legacy.models.add(model)
+    finally:
+        legacy.close()
+
+    await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        names = [t["name"] for t in model["tmpls"]]
+        assert names == ["DE→EN"]
+    finally:
+        col.close()
+
+
 async def test_existing_notetype_gets_cloze_sentence_field_added(tmp_path: Path):
     # Simulate an Anki collection that already has the legacy 9-field "Vocab"
     # notetype from before #23 landed. _ensure_notetype must idempotently add

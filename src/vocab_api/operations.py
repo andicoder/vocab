@@ -1,13 +1,14 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .anki_writer import AnkiBackend, VocabCardContent
+from .anki_writer import AnkiBackend, CardDirection, VocabCardContent
 from .audio import AudioRequest, AudioStorage, audio_key
 from .kindle import parse_kindle_vocab
 from .models import Entry, User
@@ -62,7 +63,10 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
         audio_filename=audio_filename,
         source=entry.source,
     )
-    card_id = await deps.anki_writer.write_card(username=user.username, content=content)
+    direction = cast(CardDirection, user.card_direction)
+    card_id = await deps.anki_writer.write_card(
+        username=user.username, content=content, direction=direction
+    )
 
     now = datetime.now(UTC)
     entry.anki_card_id = card_id

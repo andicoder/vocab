@@ -7,7 +7,7 @@ from typing import cast
 from anki.collection import Collection
 from anki.sync_pb2 import SyncAuth
 
-from .anki_writer import VocabCardContent, add_vocab_note, write_media_file
+from .anki_writer import CardDirection, VocabCardContent, add_vocab_note, write_media_file
 
 log = logging.getLogger(__name__)
 
@@ -62,11 +62,19 @@ class AnkiSyncWriter:
             self._user_locks[username] = asyncio.Lock()
         return self._user_locks[username]
 
-    async def write_card(self, *, username: str, content: VocabCardContent) -> int:
+    async def write_card(
+        self,
+        *,
+        username: str,
+        content: VocabCardContent,
+        direction: CardDirection = "de_en",
+    ) -> int:
         async with self._user_lock(username):
-            return await asyncio.to_thread(self._write_and_sync, username, content)
+            return await asyncio.to_thread(self._write_and_sync, username, content, direction)
 
-    def _write_and_sync(self, username: str, content: VocabCardContent) -> int:
+    def _write_and_sync(
+        self, username: str, content: VocabCardContent, direction: CardDirection
+    ) -> int:
         if username not in self._credentials:
             raise RuntimeError(
                 f"no anki-sync credentials configured for user '{username}' "
@@ -84,7 +92,7 @@ class AnkiSyncWriter:
             # review, etc.) before we mutate; otherwise the upstream sync
             # may flag a conflict that needs a full sync to resolve.
             col.sync_collection(auth, sync_media=False)
-            card_id = add_vocab_note(col, self._deck_name, content)
+            card_id = add_vocab_note(col, self._deck_name, content, direction=direction)
             col.sync_collection(auth, sync_media=True)
             return card_id
         finally:
