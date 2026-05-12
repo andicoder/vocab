@@ -16,6 +16,7 @@ VOCAB_FIELDS = [
     "Alternatives",
     "IPA",
     "SenseLabel",
+    "Collocations",
     "Audio",
     "Source",
     "DateAdded",
@@ -61,6 +62,7 @@ _BACK_DE_EN = (
     '<div class="word">{{Word}}</div>'
     "{{Audio}}"
     '<div class="sentence">{{Sentence}}</div>'
+    '{{#Collocations}}<div class="collocations">{{Collocations}}</div>{{/Collocations}}'
     '<div class="alternatives">{{Alternatives}}</div>'
     '<div class="ipa">{{IPA}}</div>'
     '<div class="source">{{Source}}</div>'
@@ -75,6 +77,7 @@ _BACK_EN_DE = (
     '<div class="translation">{{Translation}}{{#SenseLabel}}, {{SenseLabel}}{{/SenseLabel}}</div>'
     "{{Audio}}"
     '<div class="sentence">{{Sentence}}</div>'
+    '{{#Collocations}}<div class="collocations">{{Collocations}}</div>{{/Collocations}}'
     '<div class="alternatives">{{Alternatives}}</div>'
     '<div class="ipa">{{IPA}}</div>'
 )
@@ -103,6 +106,7 @@ class VocabCardContent:
     alternatives: str
     ipa: str
     sense_label: str
+    collocations: str
     audio_data: bytes | None
     audio_filename: str | None
     source: str | None
@@ -159,6 +163,7 @@ def add_vocab_note(
     note["Alternatives"] = content.alternatives
     note["IPA"] = content.ipa
     note["SenseLabel"] = content.sense_label
+    note["Collocations"] = content.collocations
     note["Audio"] = f"[sound:{content.audio_filename}]" if content.audio_filename else ""
     note["Source"] = content.source or ""
     note["DateAdded"] = datetime.now(UTC).date().isoformat()
