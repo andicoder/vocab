@@ -13,14 +13,13 @@ from vocab_api.config import settings
 
 _ROOT = Path(__file__).resolve().parents[1]
 _TABLES = ("entry", "user", "translation_cache", "audio_cache")
+_DB_FIXTURES = frozenset({"db_session", "http_client"})
+
+_migrations_done = False
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _alembic_upgrade() -> None:
-    cfg = Config(_ROOT / "alembic.ini")
-    cfg.set_main_option("script_location", str(_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", settings.database_url)
-    command.upgrade(cfg, "head")
+def _needs_db(request: pytest.FixtureRequest) -> bool:
+    return bool(_DB_FIXTURES.intersection(request.fixturenames))
 
 
 async def _truncate_all() -> None:
@@ -34,7 +33,20 @@ async def _truncate_all() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _clean_tables() -> None:
+def _db_setup(request: pytest.FixtureRequest) -> None:
+    # Only touch Postgres for tests that actually use it. Pure unit tests
+    # (e.g. test_cloze.py) need neither the migration run nor the truncate,
+    # and forcing a connection would make them fail on a dev box without
+    # the dev DB running.
+    if not _needs_db(request):
+        return
+    global _migrations_done
+    if not _migrations_done:
+        cfg = Config(_ROOT / "alembic.ini")
+        cfg.set_main_option("script_location", str(_ROOT / "alembic"))
+        cfg.set_main_option("sqlalchemy.url", settings.database_url)
+        command.upgrade(cfg, "head")
+        _migrations_done = True
     asyncio.run(_truncate_all())
 
 
