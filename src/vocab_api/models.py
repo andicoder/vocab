@@ -27,6 +27,15 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    # `card_direction` controls which Anki templates the worker materialises
+    # per note (see #25). 'de_en' = production (German hint → recall English,
+    # default per Wozniak's 20 Rules), 'en_de' = recognition only, 'both' = two
+    # cards per note. Stored as a free-form string with a CHECK constraint at
+    # the DB level; the column is small enough that an enum migration would
+    # add more pain than value.
+    card_direction: Mapped[str] = mapped_column(
+        String, nullable=False, default="de_en", server_default="de_en"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
