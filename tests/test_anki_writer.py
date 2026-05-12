@@ -237,9 +237,7 @@ async def test_collocations_persist_to_note_and_render_on_back(tmp_path: Path):
     col = _open_collection(tmp_path, "alice")
     try:
         note = col.get_card(card_id).note()
-        assert note["Collocations"] == (
-            "make a decision · tough decision · reach a decision"
-        )
+        assert note["Collocations"] == ("make a decision · tough decision · reach a decision")
         model = col.models.by_name(VOCAB_NOTETYPE)
         assert model is not None
         afmt = model["tmpls"][0]["afmt"]

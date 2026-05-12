@@ -733,9 +733,7 @@ async def test_cloze_sentence_invented_when_word_not_in_source_sentence(
     assert entry.sentence == "Dozens turned up at the door."
 
 
-async def test_process_entry_persists_joined_collocations(
-    db_session: AsyncSession, tmp_path: Path
-):
+async def test_process_entry_persists_joined_collocations(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
     payload = {
         **_TRANSLATE_PAYLOAD,
@@ -755,9 +753,7 @@ async def test_process_entry_persists_joined_collocations(
     finally:
         await http.aclose()
 
-    assert entry.collocations == (
-        "go on an expedition · Arctic expedition · lead an expedition"
-    )
+    assert entry.collocations == ("go on an expedition · Arctic expedition · lead an expedition")
 
 
 async def test_process_entry_leaves_collocations_null_when_gemini_returns_empty(
