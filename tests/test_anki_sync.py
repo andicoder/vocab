@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from anki.collection import Collection
-from anki.sync_pb2 import SyncAuth, SyncCollectionResponse
+from anki.sync_pb2 import MediaSyncStatusResponse, SyncAuth, SyncCollectionResponse
 
 from vocab_api.anki_sync import AnkiSyncWriter, parse_credentials_json
 from vocab_api.anki_writer import VocabCardContent
@@ -48,12 +48,15 @@ class SyncHarness:
     login_calls: list[tuple[str, str, str]] = field(default_factory=list)
     sync_calls: list[tuple[str, bool]] = field(default_factory=list)
     full_calls: list[tuple[str, int, bool]] = field(default_factory=list)
+    sync_media_calls: list[str] = field(default_factory=list)
+    media_status_calls: int = 0
 
 
 def _patch_sync(
     monkeypatch: pytest.MonkeyPatch,
     *,
     sync_responses: Iterable[SyncCollectionResponse] | None = None,
+    media_active_for: int = 0,
 ) -> SyncHarness:
     harness = SyncHarness()
     responses = iter(sync_responses) if sync_responses is not None else None
@@ -73,9 +76,21 @@ def _patch_sync(
     ) -> None:
         harness.full_calls.append((auth.hkey, server_usn or -1, upload))
 
+    def fake_sync_media(self: Collection, auth: SyncAuth) -> None:
+        harness.sync_media_calls.append(auth.hkey)
+
+    def fake_media_status(self: Collection) -> MediaSyncStatusResponse:
+        harness.media_status_calls += 1
+        active = harness.media_status_calls <= media_active_for
+        return MediaSyncStatusResponse(active=active)
+
     monkeypatch.setattr(Collection, "sync_login", fake_login)
     monkeypatch.setattr(Collection, "sync_collection", fake_sync)
     monkeypatch.setattr(Collection, "full_upload_or_download", fake_full)
+    monkeypatch.setattr(Collection, "sync_media", fake_sync_media)
+    monkeypatch.setattr(Collection, "media_sync_status", fake_media_status)
+    # Strip the poll cadence so tests don't sleep for real seconds.
+    monkeypatch.setattr("vocab_api.anki_sync.time.sleep", lambda _s: None)
     return harness
 
 
@@ -257,6 +272,57 @@ async def test_push_with_full_download_or_full_sync_raises(
     with pytest.raises(RuntimeError, match="full sync required after write"):
         await writer.write_card(username="alice", content=_content())
     assert harness.full_calls == []
+
+
+async def test_write_card_waits_for_media_sync_to_finish_before_closing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Regression for #42: `sync_collection(sync_media=True)` only spawns the
+    # media-sync background task; `col.close()` immediately after terminates
+    # it before any audio is uploaded. The writer must poll
+    # `media_sync_status` until idle so the audio actually reaches the
+    # server.
+    harness = _patch_sync(monkeypatch, media_active_for=3)
+
+    writer = AnkiSyncWriter(
+        shadow_root=tmp_path,
+        sync_endpoint="http://anki-sync.test",
+        credentials={"alice": "pw1"},
+    )
+    await writer.write_card(username="alice", content=_content())
+
+    # The bg task was prodded (sync_media called) and the writer polled
+    # at least until the status flipped to idle.
+    assert harness.sync_media_calls == ["hkey-alice"]
+    assert harness.media_status_calls >= 4  # three active polls + the idle one
+
+
+async def test_write_card_aborts_media_sync_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # If media sync hangs (network issue on the server side), the writer
+    # must not block forever — `abort_media_sync` cleans up the bg task
+    # and the writer returns. Entry stays synced because the collection
+    # push already succeeded; pending media gets retried on the next write.
+    abort_calls: list[None] = []
+
+    def fake_abort(self: Collection) -> None:
+        abort_calls.append(None)
+
+    monkeypatch.setattr(Collection, "abort_media_sync", fake_abort)
+    # Tight timeout for the test; effectively zero because we patched
+    # time.sleep to a no-op in `_patch_sync`.
+    monkeypatch.setattr("vocab_api.anki_sync._MEDIA_SYNC_TIMEOUT_S", 0.001)
+    _patch_sync(monkeypatch, media_active_for=10_000)  # never goes idle
+
+    writer = AnkiSyncWriter(
+        shadow_root=tmp_path,
+        sync_endpoint="http://anki-sync.test",
+        credentials={"alice": "pw1"},
+    )
+    await writer.write_card(username="alice", content=_content())
+
+    assert abort_calls == [None]
 
 
 def test_parse_credentials_json_handles_empty():
