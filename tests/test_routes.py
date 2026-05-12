@@ -85,6 +85,7 @@ def test_translate_route_returns_translation(http_client: TestClient):
         "sense_key": "noun-journey",
         "sense_label": "Reise",
         "collocations": ["go on an expedition", "Arctic expedition"],
+        "extra_examples": ["The Arctic expedition lasted three months."],
     }
 
     def handler(request: httpx.Request) -> httpx.Response:

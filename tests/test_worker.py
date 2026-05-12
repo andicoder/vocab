@@ -733,6 +733,58 @@ async def test_cloze_sentence_invented_when_word_not_in_source_sentence(
     assert entry.sentence == "Dozens turned up at the door."
 
 
+async def test_process_entry_persists_joined_extra_examples(
+    db_session: AsyncSession, tmp_path: Path
+):
+    user, entry = await _make_pending_entry(db_session)
+    payload = {
+        **_TRANSLATE_PAYLOAD,
+        "extra_examples": [
+            "The Arctic expedition lasted three months.",
+            "She joined an expedition to the Amazon.",
+        ],
+    }
+    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.extra_examples == (
+        "The Arctic expedition lasted three months.<br>She joined an expedition to the Amazon."
+    )
+
+
+async def test_process_entry_leaves_extra_examples_null_when_empty(
+    db_session: AsyncSession, tmp_path: Path
+):
+    user, entry = await _make_pending_entry(db_session)
+    payload = {**_TRANSLATE_PAYLOAD, "extra_examples": []}
+    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.extra_examples is None
+
+
 async def test_process_entry_persists_joined_collocations(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
     payload = {

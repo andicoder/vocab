@@ -76,6 +76,10 @@ class Entry(Base):
     # so the Anki template can render it directly; NULL when Gemini returns
     # an empty list (function words, adverbs).
     collocations: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 1–2 extra example sentences in a context different from the source
+    # sentence (#26). Stored `<br>`-joined so Anki renders each one on its
+    # own line; NULL when Gemini couldn't think of a different context.
+    extra_examples: Mapped[str | None] = mapped_column(Text, nullable=True)
     lang: Mapped[str] = mapped_column(String, nullable=False, default="en", server_default="en")
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending", server_default="pending"
@@ -116,6 +120,7 @@ class TranslationCache(Base):
     )
     sense_label: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     collocations: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    extra_examples: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

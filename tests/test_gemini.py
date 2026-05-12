@@ -122,6 +122,92 @@ async def test_translate_prompt_asks_for_collocations():
     assert "make a decision" in prompt
 
 
+async def test_translate_returns_extra_examples():
+    payload = json.dumps(
+        {
+            "lemma": "take effect",
+            "translation": "in Kraft treten",
+            "alternatives": "",
+            "ipa": "",
+            "extra_examples": [
+                "The new policy will take effect on Jan 1st.",
+                "When does the change take effect?",
+            ],
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    client, http = _make_client(handler)
+    try:
+        result = await client.translate(word="take effect", sentence=None)
+    finally:
+        await http.aclose()
+
+    assert result.extra_examples == [
+        "The new policy will take effect on Jan 1st.",
+        "When does the change take effect?",
+    ]
+
+
+async def test_translate_defaults_extra_examples_to_empty_list_when_omitted():
+    # Same defensive default as collocations — a stripped-down Gemini
+    # response shouldn't fail card creation.
+    payload = json.dumps(
+        {
+            "lemma": "x",
+            "translation": "y",
+            "alternatives": "",
+            "ipa": "",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    client, http = _make_client(handler)
+    try:
+        result = await client.translate(word="x", sentence=None)
+    finally:
+        await http.aclose()
+
+    assert result.extra_examples == []
+
+
+async def test_translate_prompt_asks_for_extra_examples_in_other_contexts():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_gemini_response(
+                json.dumps(
+                    {
+                        "lemma": "x",
+                        "translation": "y",
+                        "alternatives": "",
+                        "ipa": "",
+                        "extra_examples": [],
+                    }
+                )
+            ),
+        )
+
+    client, http = _make_client(handler)
+    try:
+        await client.translate(word="x", sentence="The source sentence.")
+    finally:
+        await http.aclose()
+
+    prompt = captured["body"]["contents"][0]["parts"][0]["text"]
+    assert "extra_examples" in prompt
+    # The prompt should specifically ask for sentences in different contexts
+    # than the source — otherwise the model just rephrases the same scene.
+    assert "different" in prompt.lower() or "other context" in prompt.lower()
+
+
 async def test_translate_prompt_asks_for_sense_key_and_label():
     captured: dict = {}
 

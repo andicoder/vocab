@@ -60,6 +60,7 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
         ipa=entry.ipa or "",
         sense_label=entry.sense_label or "",
         collocations=entry.collocations or "",
+        extra_examples=entry.extra_examples or "",
         audio_data=audio_data,
         audio_filename=audio_filename,
         source=entry.source,
