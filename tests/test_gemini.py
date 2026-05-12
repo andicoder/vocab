@@ -29,6 +29,8 @@ async def test_translate_returns_parsed_result():
             "translation": "die Expedition",
             "alternatives": "der Forschungsausflug, die Reise",
             "ipa": "/ˌɛkspɪˈdɪʃən/",
+            "sense_key": "noun-journey",
+            "sense_label": "Reise",
         }
     )
 
@@ -46,7 +48,49 @@ async def test_translate_returns_parsed_result():
         translation="die Expedition",
         alternatives="der Forschungsausflug, die Reise",
         ipa="/ˌɛkspɪˈdɪʃən/",
+        sense_key="noun-journey",
+        sense_label="Reise",
     )
+    # Defend against pydantic silently ignoring unknown fields — these must
+    # actually be present on the model after #24.
+    assert result.sense_key == "noun-journey"
+    assert result.sense_label == "Reise"
+
+
+async def test_translate_prompt_asks_for_sense_key_and_label():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_gemini_response(
+                json.dumps(
+                    {
+                        "lemma": "train",
+                        "translation": "trainieren",
+                        "alternatives": "",
+                        "ipa": "",
+                        "sense_key": "verb-exercise",
+                        "sense_label": "trainieren (sportlich)",
+                    }
+                )
+            ),
+        )
+
+    client, http = _make_client(handler)
+    try:
+        await client.translate(word="train", sentence="I need to train for a marathon.")
+    finally:
+        await http.aclose()
+
+    prompt_text = captured["body"]["contents"][0]["parts"][0]["text"]
+    # Anchor the slug shape and the disambiguation label in the prompt so the
+    # model returns consistent values across calls (#24).
+    assert "sense_key" in prompt_text
+    assert "sense_label" in prompt_text
+    # Show at least one example slug so the model picks the documented shape.
+    assert "verb-" in prompt_text or "noun-" in prompt_text
 
 
 async def test_translate_hits_correct_endpoint_and_passes_api_key():

@@ -54,6 +54,8 @@ def test_translate_route_returns_translation(http_client: TestClient):
         "translation": "die Expedition",
         "alternatives": "die Reise",
         "ipa": "/ˌɛkspɪˈdɪʃən/",
+        "sense_key": "noun-journey",
+        "sense_label": "Reise",
     }
 
     def handler(request: httpx.Request) -> httpx.Response:

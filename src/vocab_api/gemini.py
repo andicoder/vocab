@@ -31,6 +31,12 @@ class TranslationResult(BaseModel):
     translation: str
     alternatives: str
     ipa: str
+    # `sense_key` is the slug used to allow multiple cards per lemma — one per
+    # distinct meaning, see #24. Defaults to "default" so legacy code paths
+    # and tests that don't care about polysemy keep working. `sense_label` is
+    # a short German hint shown on the card.
+    sense_key: str = "default"
+    sense_label: str = ""
 
 
 class InventedExample(BaseModel):
@@ -45,7 +51,8 @@ class InventedExample(BaseModel):
 
 _TRANSLATE_PROMPT = """\
 Translate the following English word to German for a vocabulary flashcard.
-Use the sentence to determine the part of speech of the English word, then return JSON:
+Use the sentence to determine the part of speech and the *specific meaning*
+of the English word in context, then return JSON:
 - lemma: dictionary form of the English word, lowercase, no article
 - translation: primary German translation in dictionary form:
     * for nouns: include article (e.g. "die Expedition")
@@ -53,6 +60,12 @@ Use the sentence to determine the part of speech of the English word, then retur
     * for adjectives/adverbs: uninflected form, no article (e.g. "genial", NOT "der geniale")
 - alternatives: comma-separated German alternatives in the same form as `translation`, may be empty
 - ipa: US IPA in slashes (e.g. "/ˌɛkspɪˈdɪʃən/")
+- sense_key: canonical slug for the specific meaning, lowercase ASCII,
+    hyphen-separated, max 32 chars. Shape: `<part-of-speech>-<distinguisher>`,
+    e.g. "verb-exercise", "noun-journey", "noun-railway", "verb-instruct".
+    Use the SAME slug whenever the same meaning recurs.
+- sense_label: short German hint that disambiguates this meaning from others
+    (e.g. "sportlich", "Reise", "Eisenbahn"). May be empty for monosemous words.
 
 Word: {word}
 {sentence_block}
@@ -162,6 +175,8 @@ async def translate_with_cache(
             translation=cached.translation,
             alternatives=cached.alternatives,
             ipa=cached.ipa,
+            sense_key=cached.sense_key,
+            sense_label=cached.sense_label,
         )
 
     result = await gemini.translate(word=request.word, sentence=request.sentence)
@@ -179,6 +194,8 @@ async def translate_with_cache(
                     translation=result.translation,
                     alternatives=result.alternatives,
                     ipa=result.ipa,
+                    sense_key=result.sense_key,
+                    sense_label=result.sense_label,
                 )
             )
     except IntegrityError:
