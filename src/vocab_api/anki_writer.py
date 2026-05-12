@@ -186,9 +186,7 @@ class AnkiWriter:
             col.close()
 
 
-def _ensure_notetype(
-    col: Collection, *, direction: CardDirection = "de_en"
-) -> dict[str, Any]:
+def _ensure_notetype(col: Collection, *, direction: CardDirection = "de_en") -> dict[str, Any]:
     existing = col.models.by_name(VOCAB_NOTETYPE)
     if existing is None:
         return _create_notetype(col, direction=direction)
@@ -210,9 +208,7 @@ def _create_notetype(col: Collection, *, direction: CardDirection) -> dict[str, 
     return model
 
 
-def _migrate_notetype(
-    col: Collection, model: dict[str, Any], *, direction: CardDirection
-) -> None:
+def _migrate_notetype(col: Collection, model: dict[str, Any], *, direction: CardDirection) -> None:
     """Bring an existing 'Vocab' notetype up to the current field+template spec.
 
     Called on every write, so it must be idempotent and cheap when there's
