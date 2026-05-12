@@ -15,7 +15,7 @@ from .anki_writer import CardDirection, VocabCardContent, add_vocab_note, write_
 # FULL_UPLOAD) means the shadow's schema-mod-time doesn't match the
 # server's — sync_collection returns *without transferring any data*, and
 # the writer would otherwise silently land cards in a detached shadow
-# (#40). Resolve by downloading the server's canonical state.
+# (#40).
 _INCREMENTAL_REQUIRED = {
     SyncCollectionResponse.NO_CHANGES,
     SyncCollectionResponse.NORMAL_SYNC,
@@ -107,18 +107,10 @@ class AnkiSyncWriter:
             # review, etc.) before we mutate; otherwise the upstream sync
             # may flag a conflict that needs a full sync to resolve.
             pull = col.sync_collection(auth, sync_media=False)
-            _reattach_if_full_sync_required(col, pull, auth=auth)
+            _reattach_before_write(col, pull, auth=auth)
             card_id = add_vocab_note(col, content, direction=direction, lang=lang)
             push = col.sync_collection(auth, sync_media=True)
-            if push.required not in _INCREMENTAL_REQUIRED:
-                # We just wrote a note; a download here would erase it and an
-                # upload could clobber server state that arrived in the
-                # meantime. Surface it instead — the caller will leave the
-                # entry unsynced so the next write attempt retries.
-                raise RuntimeError(
-                    f"full sync required after write (required={push.required}) "
-                    f"for user '{username}'; aborting before data loss"
-                )
+            _resolve_after_write(col, push, auth=auth, username=username)
             return card_id
         finally:
             col.close()
@@ -133,25 +125,54 @@ class AnkiSyncWriter:
         return auth
 
 
-def _reattach_if_full_sync_required(
-    col: Collection, out: SyncCollectionResponse, *, auth: SyncAuth
-) -> None:
-    """Download the server's canonical collection if the shadow is detached.
+def _reattach_before_write(col: Collection, out: SyncCollectionResponse, *, auth: SyncAuth) -> None:
+    """Resolve a detached shadow by downloading the server's canonical state.
 
     After a pod rollout the per-user shadow file is fresh (emptyDir),
     so its `scm` doesn't match the server and `sync_collection` returns
-    `required=FULL_SYNC` without transferring data (#40). We download
-    rather than upload: the anki-sync-server holds the user's real cards,
-    and uploading our empty shadow would wipe them. After this call,
-    subsequent `sync_collection` invocations return NORMAL_SYNC and the
-    incremental push works."""
+    `required=FULL_SYNC` without transferring data (#40). The shadow has
+    no local writes yet, so downloading is always safe: we discard a
+    potentially-stale fresh shadow and replace it with the server's
+    real cards. After this call, subsequent `sync_collection` invocations
+    return NORMAL_SYNC and the incremental push works."""
     if out.required in _INCREMENTAL_REQUIRED:
         return
     log.info(
-        "anki-sync: shadow detached (required=%s); downloading server state",
+        "anki-sync: shadow detached on pull (required=%s); downloading server state",
         out.required,
     )
     col.full_upload_or_download(auth=auth, server_usn=out.server_media_usn, upload=False)
+
+
+def _resolve_after_write(
+    col: Collection,
+    out: SyncCollectionResponse,
+    *,
+    auth: SyncAuth,
+    username: str,
+) -> None:
+    """Resolve sync state after locally adding a note.
+
+    The new note brings new fields/templates with it (`_ensure_notetype`
+    bumps the notetype's mod-time), which on the very first write per
+    user prompts the server to demand a FULL_UPLOAD. That's the
+    legitimate path — we have more than the server, so we upload.
+
+    FULL_DOWNLOAD or FULL_SYNC after our write is the dangerous case:
+    the server is claiming it has data we don't, and accepting that
+    would erase the note we just added. Raise instead — the caller
+    leaves the entry unsynced and the next worker tick retries."""
+    required = out.required
+    if required in _INCREMENTAL_REQUIRED:
+        return
+    if required == SyncCollectionResponse.FULL_UPLOAD:
+        log.info("anki-sync: full upload required after write user=%s", username)
+        col.full_upload_or_download(auth=auth, server_usn=out.server_media_usn, upload=True)
+        return
+    raise RuntimeError(
+        f"full sync required after write (required={required}) "
+        f"for user '{username}'; aborting before data loss"
+    )
 
 
 def parse_credentials_json(raw: str) -> dict[str, str]:
