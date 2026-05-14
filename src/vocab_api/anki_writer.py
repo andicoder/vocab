@@ -64,9 +64,9 @@ _FRONT_DE_EN = (
 )
 _BACK_DE_EN = (
     "{{FrontSide}}<hr>"
-    "<h2>{{Word}}</h2>"
+    "<h2>{{Lemma}}</h2>"
     "{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
-    "{{Audio}}"
+    "{{#Audio}}<p>{{Audio}}</p>{{/Audio}}"
     "<p><strong>{{Translation}}</strong>"
     "{{#SenseLabel}} <em>({{SenseLabel}})</em>{{/SenseLabel}}"
     "</p>"
@@ -77,10 +77,11 @@ _BACK_DE_EN = (
     "{{#Source}}<p><small>{{Source}}</small></p>{{/Source}}"
 )
 
-# Recognition direction: word + IPA on the front, translation + supporting
-# context on the back. Audio on the back so listening always follows the
-# recall attempt regardless of direction.
-_FRONT_EN_DE = "<h2>{{Word}}</h2>{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
+# Recognition direction: lemma + IPA on the front, translation + supporting
+# context on the back. The headword is the dictionary form, not the user's
+# inflected input — the surface form still appears in the example sentence.
+# Audio on the back so listening always follows the recall attempt.
+_FRONT_EN_DE = "<h2>{{Lemma}}</h2>{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
 _BACK_EN_DE = (
     "{{FrontSide}}<hr>"
     "<p><strong>{{Translation}}</strong>"
