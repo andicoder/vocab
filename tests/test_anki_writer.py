@@ -207,7 +207,7 @@ async def test_front_template_uses_cloze_sentence_and_translation_hint(tmp_path:
         col.close()
 
 
-async def test_back_template_shows_word_audio_and_full_sentence(tmp_path: Path):
+async def test_back_template_shows_lemma_audio_and_full_sentence(tmp_path: Path):
     writer = AnkiWriter(root=tmp_path)
     await writer.write_card(username="alice", content=_content())
 
@@ -216,9 +216,31 @@ async def test_back_template_shows_word_audio_and_full_sentence(tmp_path: Path):
         model = col.models.by_name(VOCAB_NOTETYPE)
         assert model is not None
         afmt = model["tmpls"][0]["afmt"]
-        assert "{{Word}}" in afmt
+        # Headword is the dictionary form, not the user's inflected input —
+        # the learner studies the lemma; the surface form still shows up in
+        # the example sentence and the cloze gap.
+        assert "{{Lemma}}" in afmt
+        assert "{{Word}}" not in afmt
         assert "{{Audio}}" in afmt
         assert "{{Sentence}}" in afmt
+    finally:
+        col.close()
+
+
+async def test_de_en_back_renders_audio_in_its_own_block(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        afmt = model["tmpls"][0]["afmt"]
+        # Audio gets its own paragraph instead of sitting inline next to the
+        # small IPA text — bigger tap target on mobile, and consistent with
+        # the EN→DE back where audio already stands on its own line.
+        assert "{{#Audio}}<p>{{Audio}}</p>{{/Audio}}" in afmt
+        assert "{{/IPA}}{{Audio}}" not in afmt
     finally:
         col.close()
 
@@ -428,9 +450,9 @@ async def test_both_direction_creates_two_templates(tmp_path: Path):
         assert model is not None
         names = [t["name"] for t in model["tmpls"]]
         assert names == ["DE→EN", "EN→DE"]
-        # EN→DE template shows the bare word on the front.
+        # EN→DE template shows the bare lemma on the front.
         en_de = model["tmpls"][1]
-        assert en_de["qfmt"].strip() == "<h2>{{Word}}</h2>{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
+        assert en_de["qfmt"].strip() == "<h2>{{Lemma}}</h2>{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
         assert "{{Translation}}" in en_de["afmt"]
     finally:
         col.close()
