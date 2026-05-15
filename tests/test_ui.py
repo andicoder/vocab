@@ -121,7 +121,11 @@ def test_htmx_approve_writes_anki_and_clears_row(http_client: TestClient, tmp_pa
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_anki_writer] = lambda: anki_writer
 
-    create = http_client.post("/vocab", json={"word": "expedition"}, headers=_alice())
+    create = http_client.post(
+        "/vocab",
+        json={"word": "expedition", "sentence": "A grand expedition north."},
+        headers=_alice(),
+    )
     entry_id = create.json()["id"]
 
     response = http_client.post(

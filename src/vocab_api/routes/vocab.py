@@ -97,13 +97,19 @@ async def approve_entry(
     session: Annotated[AsyncSession, Depends(get_session)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
     anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
+    gemini: Annotated[GeminiClient, Depends(get_gemini)],
 ) -> Entry:
     entry = await load_owned_entry(session, entry_id, user)
     await apply_approve(
         entry=entry,
         payload=payload,
         user=user,
-        deps=ApprovalDeps(storage=storage, anki_writer=anki_writer, voice=settings.audio_voice),
+        deps=ApprovalDeps(
+            storage=storage,
+            anki_writer=anki_writer,
+            gemini=gemini,
+            voice=settings.audio_voice,
+        ),
     )
     await session.commit()
     await session.refresh(entry)

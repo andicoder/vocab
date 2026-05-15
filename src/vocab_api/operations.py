@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .anki_writer import AnkiBackend, CardDirection, VocabCardContent
 from .audio import AudioRequest, AudioStorage, audio_key
+from .cloze import populate_cloze
+from .gemini import GeminiClient
 from .kindle import parse_kindle_vocab
 from .models import Entry, User
 
@@ -23,10 +25,15 @@ class ApprovePayload(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ApprovalDeps:
-    """Collaborators needed to finalize an entry into an Anki card."""
+    """Collaborators needed to finalize an entry into an Anki card.
+
+    `gemini` only fires inside `apply_approve` to backfill `cloze_sentence`
+    on legacy entries that landed in `needs-review` before #23 — fresh
+    entries already have it populated by the worker."""
 
     storage: AudioStorage
     anki_writer: AnkiBackend
+    gemini: GeminiClient
     voice: str
 
 
@@ -95,6 +102,9 @@ async def apply_approve(
 
     if not entry.lemma or not entry.translation:
         raise HTTPException(status_code=400, detail="entry not yet translated")
+
+    if not entry.cloze_sentence:
+        await populate_cloze(entry, gemini=deps.gemini, lemma=entry.lemma)
 
     await write_entry_to_anki(entry=entry, user=user, deps=deps)
 

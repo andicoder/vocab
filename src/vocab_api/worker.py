@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .anki_writer import AnkiBackend
 from .audio import AudioRequest, AudioStorage, TtsClient, synthesize_with_cache
-from .cloze import mask_word_in_sentence
+from .cloze import populate_cloze
 from .gemini import (
     GeminiClient,
     TranslationRequest,
@@ -111,7 +111,7 @@ async def process_entry(
         storage=deps.storage,
         request=AudioRequest(word=translation.lemma, voice=deps.voice, lang=entry.lang),
     )
-    await _populate_cloze(entry, gemini=deps.gemini, lemma=translation.lemma)
+    await populate_cloze(entry, gemini=deps.gemini, lemma=translation.lemma)
 
     entry.lemma = translation.lemma
     entry.translation = translation.translation
@@ -127,7 +127,12 @@ async def process_entry(
         await write_entry_to_anki(
             entry=entry,
             user=user,
-            deps=ApprovalDeps(storage=deps.storage, anki_writer=deps.anki_writer, voice=deps.voice),
+            deps=ApprovalDeps(
+                storage=deps.storage,
+                anki_writer=deps.anki_writer,
+                gemini=deps.gemini,
+                voice=deps.voice,
+            ),
         )
         log.info(
             "synced entry id=%s user=%s lemma=%s",
@@ -145,30 +150,6 @@ async def process_entry(
             verdict,
         )
     return None
-
-
-async def _populate_cloze(entry: Entry, *, gemini: GeminiClient, lemma: str) -> None:
-    """Fill `entry.cloze_sentence` (and `entry.sentence` if it was empty).
-
-    Prefers the deterministic path: mask the user-submitted surface form
-    (entry.word) inside the user-submitted source sentence. Falls back to
-    a Gemini-invented example only when there is no source sentence at all
-    or when the surface form does not appear in the source sentence
-    (a rare edge case worth a warning)."""
-    if entry.sentence:
-        masked = mask_word_in_sentence(word=entry.word, sentence=entry.sentence)
-        if masked is not None:
-            entry.cloze_sentence = masked
-            return
-        log.warning(
-            "cloze regex miss id=%s word=%r — falling back to invented example",
-            entry.id,
-            entry.word,
-        )
-
-    invented = await gemini.invent_example(lemma=lemma)
-    entry.sentence = invented.sentence
-    entry.cloze_sentence = invented.cloze_sentence
 
 
 async def _sense_already_exists(  # noqa: PLR0913 — six narrow scalars are clearer than a one-call-site dataclass

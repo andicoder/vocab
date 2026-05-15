@@ -1,13 +1,17 @@
+import asyncio
 import json
 from collections.abc import Iterator
 from pathlib import Path
 
 import httpx
 import pytest
+from anki.collection import Collection
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from vocab_api.anki_writer import AnkiWriter
 from vocab_api.audio import AudioRequest, LocalDirAudioStorage, audio_key
+from vocab_api.db import engine
 from vocab_api.deps import get_anki_writer, get_gemini, get_storage, get_tts
 from vocab_api.gemini import GeminiClient
 from vocab_api.main import app
@@ -173,7 +177,7 @@ def test_approve_writes_anki_card_and_marks_synced(http_client: TestClient, tmp_
 
     create = http_client.post(
         "/vocab",
-        json={"word": "expedition"},
+        json={"word": "expedition", "sentence": "A grand expedition north."},
         headers={"X-authentik-username": "alice"},
     )
     assert create.status_code == 201, create.text
@@ -219,6 +223,51 @@ def test_approve_rejects_untranslated_entry(http_client: TestClient, tmp_path: P
     )
 
     assert response.status_code == 400
+
+
+def test_approve_backfills_cloze_when_entry_missing_it(http_client: TestClient, tmp_path: Path):
+    # Regression: entries that landed in `needs-review` before #23 lack a
+    # cloze_sentence. Approving them today must derive one (via the regex
+    # mask on the source sentence) before the note hits Anki — otherwise the
+    # DE→EN front renders an empty `<p>`.
+    storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
+    anki_writer = AnkiWriter(root=tmp_path / "anki")
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+
+    create = http_client.post(
+        "/vocab",
+        json={"word": "expedition", "sentence": "A grand expedition north."},
+        headers={"X-authentik-username": "alice"},
+    )
+    assert create.status_code == 201
+    entry_id = create.json()["id"]
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE vocab.entry SET status='needs-review', cloze_sentence=NULL"
+                    f" WHERE id = {entry_id}"
+                )
+            )
+
+    asyncio.run(_seed())
+
+    response = http_client.post(
+        f"/vocab/{entry_id}/approve",
+        json={"lemma": "expedition", "translation": "die Expedition"},
+        headers={"X-authentik-username": "alice"},
+    )
+
+    assert response.status_code == 200, response.text
+    card_id = response.json()["anki_card_id"]
+    col = Collection(str(tmp_path / "anki" / "alice" / "collection.anki2"))
+    try:
+        note = col.get_card(card_id).note()
+        assert note["ClozeSentence"] == "A grand ___ north."
+    finally:
+        col.close()
 
 
 def test_reject_marks_rejected(http_client: TestClient):
