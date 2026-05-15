@@ -28,5 +28,9 @@
   "action.reject": "Reject",
   "action.reject.confirm": "Reject this entry?",
   "toast.added": "{word} added — status: {status}",
-  "toast.exists": "\"{word}\" — already in your collection as \"{lemma}\", nothing added."
+  "toast.exists": "\"{word}\" — already in your collection as \"{lemma}\", nothing added.",
+  "toast.error.not_translated": "Entry is not translated yet — please fill in lemma and translation.",
+  "toast.error.not_found": "Entry not found.",
+  "toast.error.generic": "Action failed — please try again.",
+  "toast.error.network": "Server unreachable — please try again."
 }
