@@ -46,6 +46,7 @@
         <a href="/queue" class="{% if active == 'queue' %}active{% endif %}">{{ t("nav.queue") }}</a>
         <a href="/bookmarklet" class="{% if active == 'bookmarklet' %}active{% endif %}">{{ t("nav.bookmarklet") }}</a>
     </nav>
+    <div id="toast" aria-live="polite"></div>
     {% block content %}{% endblock %}
     <script>
         if ("serviceWorker" in navigator) {
@@ -53,6 +54,18 @@
                 console.warn("sw register failed", e);
             });
         }
+        // Surface unhandled HTMX errors (network failure, unexpected non-2xx
+        // without HX-Retarget) as a visible toast — see #52.
+        document.body.addEventListener("htmx:responseError", function (evt) {
+            var toast = document.getElementById("toast");
+            if (!toast) return;
+            toast.innerHTML = '<div class="toast error">{{ t("toast.error.generic") }}</div>';
+        });
+        document.body.addEventListener("htmx:sendError", function (evt) {
+            var toast = document.getElementById("toast");
+            if (!toast) return;
+            toast.innerHTML = '<div class="toast error">{{ t("toast.error.network") }}</div>';
+        });
     </script>
 </body>
 </html>

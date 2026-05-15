@@ -28,5 +28,9 @@
   "action.reject": "Verwerfen",
   "action.reject.confirm": "Diesen Eintrag verwerfen?",
   "toast.added": "{word} hinzugefügt — Status: {status}",
-  "toast.exists": "„{word}“ — schon als „{lemma}“ in der Sammlung, nichts hinzugefügt."
+  "toast.exists": "„{word}“ — schon als „{lemma}“ in der Sammlung, nichts hinzugefügt.",
+  "toast.error.not_translated": "Eintrag ist noch nicht übersetzt — bitte Lemma und Übersetzung ausfüllen.",
+  "toast.error.not_found": "Eintrag nicht gefunden.",
+  "toast.error.generic": "Aktion fehlgeschlagen — bitte erneut versuchen.",
+  "toast.error.network": "Server nicht erreichbar — bitte erneut versuchen."
 }

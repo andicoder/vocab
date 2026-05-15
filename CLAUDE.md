@@ -26,16 +26,23 @@ This file is loaded automatically by Claude Code when working in this repo. It c
 
 ## Local workflow
 
-```sh
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+A `.venv` already exists at the project root. **Do not** `source .venv/bin/activate` — call the venv binaries by path so the shell stays clean.
 
-# Run tests (hot path)
-pytest -q
+```sh
+# Initial setup (only when .venv is missing)
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+
+# Run tests (hot path) — Postgres must be reachable, see compose.yaml
+.venv/bin/pytest -q
+
+# Lint + format
+.venv/bin/ruff check
+.venv/bin/ruff format --check
 
 # Run app locally (needs reachable Postgres)
 VOCAB_DATABASE_URL='postgresql+asyncpg://vocab:vocab@localhost:5432/vocab' \
-  uvicorn vocab_api.main:app --reload
+  .venv/bin/uvicorn vocab_api.main:app --reload
 
 # Schema changes
 alembic revision -m "what changed"          # write migration by hand (autogenerate

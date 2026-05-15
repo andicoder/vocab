@@ -1,12 +1,13 @@
 import asyncio
+import logging
 import re
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -40,7 +41,16 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _BOOKMARKLET_JS_PATH = Path(__file__).resolve().parent.parent / "static" / "bookmarklet.js"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(tags=["ui"])
+
+# HTTPException.detail strings raised inside operations.py, mapped to i18n keys
+# so the queue UI can show a localized toast instead of a silent 4xx (#52).
+_APPROVE_ERROR_KEYS: dict[str, str] = {
+    "entry not yet translated": "toast.error.not_translated",
+    "entry not found": "toast.error.not_found",
+}
 
 
 def _build_bookmarklet_js(base_url: str) -> str:
@@ -63,6 +73,28 @@ def _render(
         **(context or {}),
     }
     return templates.TemplateResponse(request, template_name, full_context)
+
+
+def _htmx_toast_response(request: Request, message: str) -> Response:
+    """Render error_toast and redirect the swap to #toast so any caller's
+    `hx-target`/`hx-swap` is overridden — the row stays, the toast appears."""
+    response = _render(request, "partials/error_toast.html", {"message": message})
+    response.headers["HX-Retarget"] = "#toast"
+    response.headers["HX-Reswap"] = "innerHTML"
+    return response
+
+
+def _http_error_toast(request: Request, exc: HTTPException) -> Response:
+    locale = current_locale(request)
+    t = translator_for(locale)
+    key = _APPROVE_ERROR_KEYS.get(str(exc.detail), "toast.error.generic")
+    return _htmx_toast_response(request, t(key))
+
+
+def _unexpected_error_toast(request: Request) -> Response:
+    locale = current_locale(request)
+    t = translator_for(locale)
+    return _htmx_toast_response(request, t("toast.error.generic"))
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -175,6 +207,7 @@ async def htmx_create_entry(
 
 @router.post("/ui/vocab/{entry_id}/approve")
 async def htmx_approve(
+    request: Request,
     entry_id: int,
     user: Annotated[User, Depends(current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
@@ -185,32 +218,45 @@ async def htmx_approve(
     alternatives: Annotated[str | None, Form()] = None,
     ipa: Annotated[str | None, Form()] = None,
 ) -> Response:
-    entry = await load_owned_entry(session, entry_id, user)
-    payload = ApprovePayload(
-        lemma=lemma or None,
-        translation=translation or None,
-        alternatives=alternatives,
-        ipa=ipa,
-    )
-    await apply_approve(
-        entry=entry,
-        payload=payload,
-        user=user,
-        deps=ApprovalDeps(storage=storage, anki_writer=anki_writer, voice=settings.audio_voice),
-    )
-    await session.commit()
+    try:
+        entry = await load_owned_entry(session, entry_id, user)
+        payload = ApprovePayload(
+            lemma=lemma or None,
+            translation=translation or None,
+            alternatives=alternatives,
+            ipa=ipa,
+        )
+        await apply_approve(
+            entry=entry,
+            payload=payload,
+            user=user,
+            deps=ApprovalDeps(storage=storage, anki_writer=anki_writer, voice=settings.audio_voice),
+        )
+        await session.commit()
+    except HTTPException as exc:
+        return _http_error_toast(request, exc)
+    except Exception:
+        log.exception("htmx_approve failed entry_id=%s user=%s", entry_id, user.username)
+        return _unexpected_error_toast(request)
     return HTMLResponse("", status_code=200)
 
 
 @router.post("/ui/vocab/{entry_id}/reject")
 async def htmx_reject(
+    request: Request,
     entry_id: int,
     user: Annotated[User, Depends(current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> Response:
-    entry = await load_owned_entry(session, entry_id, user)
-    apply_reject(entry)
-    await session.commit()
+    try:
+        entry = await load_owned_entry(session, entry_id, user)
+        apply_reject(entry)
+        await session.commit()
+    except HTTPException as exc:
+        return _http_error_toast(request, exc)
+    except Exception:
+        log.exception("htmx_reject failed entry_id=%s user=%s", entry_id, user.username)
+        return _unexpected_error_toast(request)
     return HTMLResponse("", status_code=200)
 
 
