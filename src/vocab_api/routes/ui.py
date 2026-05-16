@@ -214,6 +214,7 @@ async def htmx_approve(
     storage: Annotated[AudioStorage, Depends(get_storage)],
     anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
     gemini: Annotated[GeminiClient, Depends(get_gemini)],
+    session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
     lemma: Annotated[str | None, Form()] = None,
     translation: Annotated[str | None, Form()] = None,
     alternatives: Annotated[str | None, Form()] = None,
@@ -228,6 +229,7 @@ async def htmx_approve(
             ipa=ipa,
         )
         await apply_approve(
+            session=session,
             entry=entry,
             payload=payload,
             user=user,
@@ -235,6 +237,7 @@ async def htmx_approve(
                 storage=storage,
                 anki_writer=anki_writer,
                 gemini=gemini,
+                cache_session_factory=session_factory,
                 voice=settings.audio_voice,
             ),
         )

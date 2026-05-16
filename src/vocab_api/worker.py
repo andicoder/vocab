@@ -131,6 +131,7 @@ async def process_entry(
                 storage=deps.storage,
                 anki_writer=deps.anki_writer,
                 gemini=deps.gemini,
+                cache_session_factory=deps.cache_session_factory,
                 voice=deps.voice,
             ),
         )

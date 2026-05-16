@@ -98,9 +98,11 @@ async def approve_entry(
     storage: Annotated[AudioStorage, Depends(get_storage)],
     anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
     gemini: Annotated[GeminiClient, Depends(get_gemini)],
+    session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
 ) -> Entry:
     entry = await load_owned_entry(session, entry_id, user)
     await apply_approve(
+        session=session,
         entry=entry,
         payload=payload,
         user=user,
@@ -108,6 +110,7 @@ async def approve_entry(
             storage=storage,
             anki_writer=anki_writer,
             gemini=gemini,
+            cache_session_factory=session_factory,
             voice=settings.audio_voice,
         ),
     )
