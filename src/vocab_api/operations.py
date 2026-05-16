@@ -6,12 +6,18 @@ from typing import cast
 from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .anki_writer import AnkiBackend, CardDirection, VocabCardContent
 from .audio import AudioRequest, AudioStorage, audio_key
 from .cloze import populate_cloze
-from .gemini import GeminiClient
+from .gemini import (
+    GeminiClient,
+    TranslationRequest,
+    join_collocations,
+    join_extra_examples,
+    translate_with_cache,
+)
 from .kindle import parse_kindle_vocab
 from .models import Entry, User
 
@@ -27,13 +33,16 @@ class ApprovePayload(BaseModel):
 class ApprovalDeps:
     """Collaborators needed to finalize an entry into an Anki card.
 
-    `gemini` only fires inside `apply_approve` to backfill `cloze_sentence`
-    on legacy entries that landed in `needs-review` before #23 — fresh
-    entries already have it populated by the worker."""
+    `gemini` + `cache_session_factory` only fire inside `apply_approve` to
+    backfill worker-only fields (cloze_sentence per #57; extra_examples,
+    collocations, sense_label per #58) on legacy entries that landed in
+    `needs-review` before the worker populated them. Fresh entries already
+    have those fields set."""
 
     storage: AudioStorage
     anki_writer: AnkiBackend
     gemini: GeminiClient
+    cache_session_factory: async_sessionmaker[AsyncSession]
     voice: str
 
 
@@ -86,6 +95,7 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
 
 async def apply_approve(
     *,
+    session: AsyncSession,
     entry: Entry,
     payload: ApprovePayload,
     user: User,
@@ -106,7 +116,35 @@ async def apply_approve(
     if not entry.cloze_sentence:
         await populate_cloze(entry, gemini=deps.gemini, lemma=entry.lemma)
 
+    await _backfill_worker_fields(session=session, entry=entry, deps=deps)
+
     await write_entry_to_anki(entry=entry, user=user, deps=deps)
+
+
+async def _backfill_worker_fields(
+    *, session: AsyncSession, entry: Entry, deps: ApprovalDeps
+) -> None:
+    """Re-run translation for legacy entries missing worker-only fields (#58).
+
+    Pre-#23 needs-review rows never went through `worker.process_entry`, so
+    `extra_examples`, `collocations` and `sense_label` are NULL. The cache hit
+    path is cheap for any word the worker has already seen — a miss falls
+    through to one Gemini call. Fresh entries arrive here with all three
+    populated and short-circuit before the lookup."""
+    if entry.extra_examples and entry.collocations and entry.sense_label:
+        return
+    tr = await translate_with_cache(
+        session=session,
+        cache_session_factory=deps.cache_session_factory,
+        gemini=deps.gemini,
+        request=TranslationRequest(word=entry.word, sentence=entry.sentence, lang=entry.lang),
+    )
+    if not entry.extra_examples:
+        entry.extra_examples = join_extra_examples(tr.extra_examples) or None
+    if not entry.collocations:
+        entry.collocations = join_collocations(tr.collocations) or None
+    if not entry.sense_label:
+        entry.sense_label = tr.sense_label or None
 
 
 def apply_reject(entry: Entry) -> None:

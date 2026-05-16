@@ -35,6 +35,33 @@ def _gemini_with_handler(handler) -> tuple[GeminiClient, httpx.AsyncClient]:
     )
 
 
+_EMPTY_TRANSLATION_JSON = json.dumps(
+    {
+        "lemma": "expedition",
+        "translation": "die Expedition",
+        "alternatives": "",
+        "ipa": "",
+        "sense_key": "default",
+        "sense_label": "",
+        "collocations": [],
+        "extra_examples": [],
+    }
+)
+
+
+def stub_translation_gemini() -> GeminiClient:
+    """Gemini stub for tests that exercise the approve path but don't care
+    about translation content. Returns an empty translation on every call so
+    `apply_approve`'s worker-field backfill (#58) doesn't hit the real API
+    on a cache miss."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_gemini_response(_EMPTY_TRANSLATION_JSON))
+
+    gemini, _ = _gemini_with_handler(handler)
+    return gemini
+
+
 class _FakeTts:
     async def synthesize(self, *, text: str, voice: str) -> bytes:
         return b"FAKE-MP3:" + text.encode()
@@ -174,6 +201,7 @@ def test_approve_writes_anki_card_and_marks_synced(http_client: TestClient, tmp_
     anki_writer = AnkiWriter(root=anki_root)
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+    app.dependency_overrides[get_gemini] = stub_translation_gemini
 
     create = http_client.post(
         "/vocab",
@@ -234,6 +262,7 @@ def test_approve_backfills_cloze_when_entry_missing_it(http_client: TestClient, 
     anki_writer = AnkiWriter(root=tmp_path / "anki")
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+    app.dependency_overrides[get_gemini] = stub_translation_gemini
 
     create = http_client.post(
         "/vocab",
@@ -266,6 +295,76 @@ def test_approve_backfills_cloze_when_entry_missing_it(http_client: TestClient, 
     try:
         note = col.get_card(card_id).note()
         assert note["ClozeSentence"] == "A grand ___ north."
+    finally:
+        col.close()
+
+
+def test_approve_backfills_extra_fields_from_translation_cache(
+    http_client: TestClient, tmp_path: Path
+):
+    # Regression for #58: pre-#23 needs-review entries lack extra_examples,
+    # collocations and sense_label — the worker writes them, but legacy rows
+    # never went through it. Approving such an entry today must backfill
+    # those fields from translate_with_cache before the Anki note is written.
+    # The cache is seeded directly so the path doesn't need a Gemini call.
+    storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
+    anki_writer = AnkiWriter(root=tmp_path / "anki")
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+
+    create = http_client.post(
+        "/vocab",
+        json={"word": "expedition", "sentence": "A grand expedition north."},
+        headers={"X-authentik-username": "alice"},
+    )
+    assert create.status_code == 201
+    entry_id = create.json()["id"]
+
+    from vocab_api.gemini import _sentence_hash  # noqa: PLC0415 — local helper, test-only use
+
+    sh = _sentence_hash("A grand expedition north.")
+    assert sh is not None
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE vocab.entry SET status='needs-review',"
+                    " extra_examples=NULL, collocations=NULL, sense_label=NULL,"
+                    " cloze_sentence='A grand ___ north.'"
+                    f" WHERE id = {entry_id}"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.translation_cache"
+                    " (word, sentence_hash, lang, lemma, translation,"
+                    "  alternatives, ipa, sense_key, sense_label,"
+                    "  collocations, extra_examples)"
+                    " VALUES ('expedition', :sh, 'en', 'expedition',"
+                    " 'die Expedition', '', '', 'noun-journey', 'Reise',"
+                    " 'go on an expedition · Arctic expedition',"
+                    " 'The Arctic expedition lasted three months.')"
+                ),
+                {"sh": sh},
+            )
+
+    asyncio.run(_seed())
+
+    response = http_client.post(
+        f"/vocab/{entry_id}/approve",
+        json={"lemma": "expedition", "translation": "die Expedition"},
+        headers={"X-authentik-username": "alice"},
+    )
+
+    assert response.status_code == 200, response.text
+    card_id = response.json()["anki_card_id"]
+    col = Collection(str(tmp_path / "anki" / "alice" / "collection.anki2"))
+    try:
+        note = col.get_card(card_id).note()
+        assert note["ExtraExamples"] == "The Arctic expedition lasted three months."
+        assert note["Collocations"] == "go on an expedition · Arctic expedition"
+        assert note["SenseLabel"] == "Reise"
     finally:
         col.close()
 
