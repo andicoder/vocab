@@ -80,6 +80,20 @@ class Entry(Base):
     # sentence (#26). Stored `<br>`-joined so Anki renders each one on its
     # own line; NULL when Gemini couldn't think of a different context.
     extra_examples: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Idiomatic alternative (#60): when Gemini flags the encountered lemma as
+    # dated/formal/regional and a more common word fits, the alt_* columns
+    # carry everything the card needs to render — translation, IPA, example
+    # sentences (joined like extra_examples) and the alt audio URL.
+    # `alt_priority` ∈ {'preferred','minor','none',NULL}: 'preferred' routes
+    # the entry to needs-review; 'minor' is shown but auto-approves; 'none'
+    # means no alt; NULL means pre-#60 row not yet re-translated.
+    alt_lemma: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alt_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alt_translation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alt_ipa: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alt_examples: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alt_audio_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    alt_priority: Mapped[str | None] = mapped_column(Text, nullable=True)
     lang: Mapped[str] = mapped_column(String, nullable=False, default="en", server_default="en")
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending", server_default="pending"
@@ -121,6 +135,15 @@ class TranslationCache(Base):
     sense_label: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     collocations: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     extra_examples: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # Mirrors `Entry.alt_*` for the cache (#60). `alt_priority == ''` flags a
+    # legacy row whose translate predates idiomaticity scoring; the cache
+    # reader treats it as stale (analogous to #43's empty-extras guard).
+    alt_lemma: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    alt_reason: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    alt_translation: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    alt_ipa: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    alt_examples: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    alt_priority: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

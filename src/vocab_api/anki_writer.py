@@ -21,6 +21,15 @@ VOCAB_FIELDS = [
     "Audio",
     "Source",
     "DateAdded",
+    # Idiomatic-alternative block (#60). All five render together inside a
+    # single `{{#AltLemma}}…{{/AltLemma}}` conditional so cards without an
+    # alternative look exactly like before.
+    "AltLemma",
+    "AltReason",
+    "AltTranslation",
+    "AltIPA",
+    "AltExamples",
+    "AltAudio",
 ]
 
 CardDirection = Literal["de_en", "en_de", "both"]
@@ -62,6 +71,16 @@ _FRONT_DE_EN = (
     "({{Translation}}{{#SenseLabel}}, {{SenseLabel}}{{/SenseLabel}})"
     "</small></p>"
 )
+_ALT_BLOCK = (
+    "{{#AltLemma}}"
+    "<hr>"
+    "<p><small><em>{{AltReason}} — more common: <strong>{{AltLemma}}</strong>"
+    " {{#AltIPA}}<small>{{AltIPA}}</small>{{/AltIPA}}"
+    " — {{AltTranslation}}</em></small></p>"
+    "{{#AltAudio}}<p>{{AltAudio}}</p>{{/AltAudio}}"
+    "{{#AltExamples}}<p><em>{{AltExamples}}</em></p>{{/AltExamples}}"
+    "{{/AltLemma}}"
+)
 _BACK_DE_EN = (
     "{{FrontSide}}<hr>"
     "<h2>{{Lemma}}</h2>"
@@ -74,7 +93,8 @@ _BACK_DE_EN = (
     '<p><em>„{{Sentence}}"</em></p>'
     "{{#ExtraExamples}}<p>{{ExtraExamples}}</p>{{/ExtraExamples}}"
     "{{#Collocations}}<p><small>{{Collocations}}</small></p>{{/Collocations}}"
-    "{{#Source}}<p><small>{{Source}}</small></p>{{/Source}}"
+    + _ALT_BLOCK
+    + "{{#Source}}<p><small>{{Source}}</small></p>{{/Source}}"
 )
 
 # Recognition direction: lemma + IPA on the front, translation + supporting
@@ -91,7 +111,7 @@ _BACK_EN_DE = (
     "{{#Alternatives}}<p><small><em>{{Alternatives}}</em></small></p>{{/Alternatives}}"
     '<p><em>„{{Sentence}}"</em></p>'
     "{{#ExtraExamples}}<p>{{ExtraExamples}}</p>{{/ExtraExamples}}"
-    "{{#Collocations}}<p><small>{{Collocations}}</small></p>{{/Collocations}}"
+    "{{#Collocations}}<p><small>{{Collocations}}</small></p>{{/Collocations}}" + _ALT_BLOCK
 )
 
 
@@ -123,6 +143,16 @@ class VocabCardContent:
     audio_data: bytes | None
     audio_filename: str | None
     source: str | None
+    # Idiomatic-alternative payload (#60). Empty strings (and None for the
+    # audio bytes/filename) mean "no alternative" — the conditional template
+    # block hides itself in that case.
+    alt_lemma: str = ""
+    alt_reason: str = ""
+    alt_translation: str = ""
+    alt_ipa: str = ""
+    alt_examples: str = ""
+    alt_audio_data: bytes | None = None
+    alt_audio_filename: str | None = None
 
 
 class AnkiBackend(Protocol):
@@ -148,6 +178,9 @@ def write_media_file(media_dir: Path, content: VocabCardContent) -> None:
     if content.audio_data is not None and content.audio_filename:
         media_dir.mkdir(parents=True, exist_ok=True)
         (media_dir / content.audio_filename).write_bytes(content.audio_data)
+    if content.alt_audio_data is not None and content.alt_audio_filename:
+        media_dir.mkdir(parents=True, exist_ok=True)
+        (media_dir / content.alt_audio_filename).write_bytes(content.alt_audio_data)
 
 
 def add_vocab_note(
@@ -181,6 +214,12 @@ def add_vocab_note(
     note["Audio"] = f"[sound:{content.audio_filename}]" if content.audio_filename else ""
     note["Source"] = content.source or ""
     note["DateAdded"] = datetime.now(UTC).date().isoformat()
+    note["AltLemma"] = content.alt_lemma
+    note["AltReason"] = content.alt_reason
+    note["AltTranslation"] = content.alt_translation
+    note["AltIPA"] = content.alt_ipa
+    note["AltExamples"] = content.alt_examples
+    note["AltAudio"] = f"[sound:{content.alt_audio_filename}]" if content.alt_audio_filename else ""
 
     col.add_note(note, deck_id=home_deck_id)
     card_ids = col.find_cards(f"nid:{note.id}")
