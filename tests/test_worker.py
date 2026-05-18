@@ -987,3 +987,139 @@ async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_p
         audio_count = await fresh.scalar(select(func.count()).select_from(AudioCache))
         assert translation_count == 1
         assert audio_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Idiomatic alternative (#60). The LLM emits alt_priority ∈
+# {"preferred", "minor", "none"}: "preferred" routes the entry to needs-review
+# even when the plausibility verdict is YES; "minor" and "none" follow the
+# existing flow. When alt_lemma is non-empty we also synthesize TTS for it so
+# the card can offer a listening cue for the better word.
+# ---------------------------------------------------------------------------
+
+
+_ALT_PAYLOAD_PREFERRED = {
+    **_TRANSLATE_PAYLOAD,
+    "alt_lemma": "exhausted",
+    "alt_reason": "dated",
+    "alt_translation": "erschöpft",
+    "alt_ipa": "/ɪɡˈzɔːstɪd/",
+    "alt_examples": [
+        "She was exhausted after the hike.",
+        "I'm too exhausted to cook tonight.",
+    ],
+    "alt_priority": "preferred",
+}
+
+
+_ALT_PAYLOAD_MINOR = {
+    **_TRANSLATE_PAYLOAD,
+    "alt_lemma": "modern",
+    "alt_reason": "formal",
+    "alt_translation": "modern",
+    "alt_ipa": "/ˈmɒdən/",
+    "alt_examples": ["A modern approach works better."],
+    "alt_priority": "minor",
+}
+
+
+async def test_process_entry_preferred_alt_routes_to_needs_review(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # Even with a YES plausibility verdict, a strong "more common alternative"
+    # signal routes the entry to needs-review so I can confirm before the
+    # card is written. The alt_* fields are persisted so the review UI can
+    # show them.
+    user, entry = await _make_pending_entry(db_session, word="weary")
+    gemini, http = _gemini_client(_make_handler(_ALT_PAYLOAD_PREFERRED, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.status == "needs-review"
+    assert entry.anki_card_id is None
+    assert entry.alt_lemma == "exhausted"
+    assert entry.alt_reason == "dated"
+    assert entry.alt_translation == "erschöpft"
+    assert entry.alt_ipa == "/ɪɡˈzɔːstɪd/"
+    assert entry.alt_examples == (
+        "She was exhausted after the hike.<br>I'm too exhausted to cook tonight."
+    )
+    assert entry.alt_audio_url is not None
+    assert entry.alt_audio_url.startswith("https://cdn.example.com/")
+    # Original lemma and its audio also persisted unchanged — the headword
+    # on the card stays the encountered word.
+    assert entry.lemma == "expedition"
+    assert entry.audio_url is not None
+    # TTS fires twice: once for the original lemma, once for the alternative.
+    assert ("expedition", "en-US-AriaNeural") in tts.calls
+    assert ("exhausted", "en-US-AriaNeural") in tts.calls
+
+
+async def test_process_entry_minor_alt_still_auto_approves(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # A "minor" stylistic alternative is shown on the card but does not stop
+    # auto-approval. Card lands in Anki; alt fields are persisted.
+    user, entry = await _make_pending_entry(db_session, word="contemporary")
+    gemini, http = _gemini_client(_make_handler(_ALT_PAYLOAD_MINOR, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.status == "synced"
+    assert entry.anki_card_id is not None
+    assert entry.alt_lemma == "modern"
+    assert entry.alt_priority == "minor"
+    assert entry.alt_audio_url is not None
+
+
+async def test_process_entry_no_alt_leaves_alt_fields_null(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # Common case: Gemini reports `alt_priority="none"` (or omits alt fields).
+    # The entry's alt_* columns stay NULL so the card template renders
+    # unchanged.
+    payload = {**_TRANSLATE_PAYLOAD, "alt_priority": "none"}
+    user, entry = await _make_pending_entry(db_session)
+    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.status == "synced"
+    assert entry.alt_lemma is None
+    assert entry.alt_reason is None
+    assert entry.alt_translation is None
+    assert entry.alt_ipa is None
+    assert entry.alt_examples is None
+    assert entry.alt_audio_url is None
+    # Only one TTS call (for the original lemma) — no alt audio synthesized.
+    assert tts.calls == [("expedition", "en-US-AriaNeural")]

@@ -20,9 +20,11 @@ def _gemini_response(text: str) -> dict:
 
 def _payload(translation: str = "die Expedition") -> str:
     # The cache reader skips rows where both collocations and extra_examples
-    # are empty (#43 — stale rows from migration defaults). Tests that rely
-    # on cache *hits* therefore have to return at least one of the two from
-    # the mock so the row counts as fresh.
+    # are empty (#43 — stale rows from migration defaults) OR where
+    # alt_priority is empty (#60 — pre-idiomaticity rows). Tests that rely
+    # on cache *hits* therefore have to return at least one of the two
+    # collocation/extras and a non-empty alt_priority from the mock so the
+    # row counts as fresh.
     return json.dumps(
         {
             "lemma": "expedition",
@@ -31,6 +33,7 @@ def _payload(translation: str = "die Expedition") -> str:
             "ipa": "/ˌɛkspɪˈdɪʃən/",
             "collocations": ["go on an expedition"],
             "extra_examples": ["She joined an expedition to the Amazon."],
+            "alt_priority": "none",
         }
     )
 
@@ -76,6 +79,7 @@ async def test_cache_miss_calls_gemini_and_stores(db_session: AsyncSession):
         ipa="/ˌɛkspɪˈdɪʃən/",
         collocations=["go on an expedition"],
         extra_examples=["She joined an expedition to the Amazon."],
+        alt_priority="none",
     )
 
     rows = (await db_session.execute(select(TranslationCache))).scalars().all()
@@ -207,14 +211,61 @@ async def test_cache_row_with_empty_collocations_and_extras_is_treated_as_miss(
     assert result.collocations == ["go on an expedition"]
 
 
+async def test_cache_row_with_empty_alt_priority_is_treated_as_miss(
+    db_session: AsyncSession,
+):
+    # Regression for #60: rows written by the pre-#60 worker have
+    # alt_priority='' (the migration default). The reader skips them so
+    # the next translate re-fills the alt_* payload. Independent of the
+    # #43 collocations/extras guard — this row has them populated.
+    # Setup uses a separate committed session for the cross-connection
+    # unique-constraint reason explained on the #43 test above.
+    async with SessionLocal() as setup, setup.begin():
+        setup.add(
+            TranslationCache(
+                word="weary",
+                sentence_hash=None,
+                lang="en",
+                lemma="weary",
+                translation="müde",
+                alternatives="",
+                ipa="",
+                collocations="legacy",
+                extra_examples="legacy",
+                alt_priority="",
+            )
+        )
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=_gemini_response(_payload(translation="müde")))
+
+    gemini, http = _client(handler)
+    try:
+        await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="weary", sentence=None),
+        )
+    finally:
+        await http.aclose()
+
+    assert calls == 1, "row with empty alt_priority should not have short-circuited Gemini"
+
+
 async def test_cache_row_with_only_one_field_populated_still_hits(
     db_session: AsyncSession,
 ):
     # Rows that have at least one of collocations / extra_examples
-    # populated are considered fresh — they came from the post-#26/#27
-    # worker. Re-querying every time would defeat the cache.
-    # Setup uses a separately committed session for the same reason as
-    # the test above (cross-connection unique-constraint deadlock).
+    # populated AND a non-empty alt_priority are considered fresh — they
+    # came from the post-#26/#27/#60 worker. Re-querying every time would
+    # defeat the cache. Setup uses a separately committed session for the
+    # same reason as the test above (cross-connection unique-constraint
+    # deadlock).
     async with SessionLocal() as setup, setup.begin():
         setup.add(
             TranslationCache(
@@ -227,6 +278,7 @@ async def test_cache_row_with_only_one_field_populated_still_hits(
                 ipa="",
                 collocations="",
                 extra_examples="However, the plan succeeded.",
+                alt_priority="none",
             )
         )
 

@@ -46,6 +46,18 @@ class TranslationResult(BaseModel):
     # the source sentence (#26). Empty default for the same defensive
     # reason as collocations.
     extra_examples: list[str] = []
+    # Idiomatic-alternative payload (#60). Populated only when the lemma is
+    # dated/formal/rare/regional and a more common word fits. `alt_priority`
+    # ∈ {"preferred","minor","none"} — "preferred" routes the entry to
+    # needs-review; "minor" is shown on the card but auto-approves; "none"
+    # means no alt. Defaults keep older mocks (and the empty-cache test
+    # payload) compatible.
+    alt_lemma: str = ""
+    alt_reason: str = ""
+    alt_translation: str = ""
+    alt_ipa: str = ""
+    alt_examples: list[str] = []
+    alt_priority: str = ""
 
 
 class InventedExample(BaseModel):
@@ -86,6 +98,31 @@ of the English word in context, then return JSON:
     the word's breadth of use, not a paraphrase of the source. Return as a
     JSON list of strings; empty list is acceptable when no different-context
     example fits.
+- alt_priority: how strongly a more common/idiomatic English alternative
+    should be surfaced. One of:
+    * "preferred" — the lemma is clearly dated, overly formal, rare or
+        regional, and a native speaker would naturally reach for `alt_lemma`
+        instead in everyday speech.
+    * "minor" — `alt_lemma` is a slightly more common register or stylistic
+        variant; both are perfectly acceptable.
+    * "none" — the lemma is in normal everyday use; no alternative is
+        warranted (leave `alt_lemma` and the other alt_* fields empty).
+    Be conservative: prefer "none" when in doubt, prefer "minor" over
+    "preferred" unless the gap in everyday use is clear.
+- alt_lemma: the more idiomatic English word or short phrase (lowercase,
+    dictionary form). Empty string when alt_priority is "none".
+- alt_reason: one short tag explaining why the original lemma was flagged
+    (e.g. "dated", "formal", "regional", "rare", "literary"). Empty when
+    alt_priority is "none".
+- alt_translation: primary German translation of `alt_lemma`, same shape
+    rules as `translation` above (article for nouns, infinitive for verbs,
+    uninflected for adjectives). Empty when alt_priority is "none".
+- alt_ipa: US IPA for `alt_lemma` in slashes. Empty when alt_priority is
+    "none".
+- alt_examples: 1–2 short English example sentences using `alt_lemma` (≤ 15
+    words each, JSON list of strings). The learner needs to see the
+    alternative in context; the user's original sentence still contains the
+    original lemma. Empty list when alt_priority is "none".
 
 Word: {word}
 {sentence_block}
@@ -226,6 +263,11 @@ async def translate_with_cache(
         # must be populated for a row to count as fresh; rows from the
         # post-0.3 worker always satisfy this for any vocabulary-like word.
         ~((TranslationCache.collocations == "") & (TranslationCache.extra_examples == "")),
+        # Same idea for the idiomatic-alternative payload (#60): rows from
+        # before that migration have `alt_priority = ''`. The post-#60 worker
+        # always emits one of {"preferred","minor","none"}, so a non-empty
+        # value reliably distinguishes fresh rows from pre-#60 ones.
+        TranslationCache.alt_priority != "",
     )
     cached = (await session.execute(stmt)).scalar_one_or_none()
     if cached is not None:
@@ -238,6 +280,12 @@ async def translate_with_cache(
             sense_label=cached.sense_label,
             collocations=split_collocations(cached.collocations),
             extra_examples=split_extra_examples(cached.extra_examples),
+            alt_lemma=cached.alt_lemma,
+            alt_reason=cached.alt_reason,
+            alt_translation=cached.alt_translation,
+            alt_ipa=cached.alt_ipa,
+            alt_examples=split_extra_examples(cached.alt_examples),
+            alt_priority=cached.alt_priority,
         )
 
     result = await gemini.translate(word=request.word, sentence=request.sentence)
@@ -259,6 +307,12 @@ async def translate_with_cache(
                     sense_label=result.sense_label,
                     collocations=join_collocations(result.collocations),
                     extra_examples=join_extra_examples(result.extra_examples),
+                    alt_lemma=result.alt_lemma,
+                    alt_reason=result.alt_reason,
+                    alt_translation=result.alt_translation,
+                    alt_ipa=result.alt_ipa,
+                    alt_examples=join_extra_examples(result.alt_examples),
+                    alt_priority=result.alt_priority,
                 )
             )
     except IntegrityError:

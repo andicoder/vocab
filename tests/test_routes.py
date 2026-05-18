@@ -117,6 +117,12 @@ def test_translate_route_returns_translation(http_client: TestClient):
         "sense_label": "Reise",
         "collocations": ["go on an expedition", "Arctic expedition"],
         "extra_examples": ["The Arctic expedition lasted three months."],
+        "alt_lemma": "",
+        "alt_reason": "",
+        "alt_translation": "",
+        "alt_ipa": "",
+        "alt_examples": [],
+        "alt_priority": "none",
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -340,11 +346,11 @@ def test_approve_backfills_extra_fields_from_translation_cache(
                     "INSERT INTO vocab.translation_cache"
                     " (word, sentence_hash, lang, lemma, translation,"
                     "  alternatives, ipa, sense_key, sense_label,"
-                    "  collocations, extra_examples)"
+                    "  collocations, extra_examples, alt_priority)"
                     " VALUES ('expedition', :sh, 'en', 'expedition',"
                     " 'die Expedition', '', '', 'noun-journey', 'Reise',"
                     " 'go on an expedition · Arctic expedition',"
-                    " 'The Arctic expedition lasted three months.')"
+                    " 'The Arctic expedition lasted three months.', 'none')"
                 ),
                 {"sh": sh},
             )
@@ -365,6 +371,84 @@ def test_approve_backfills_extra_fields_from_translation_cache(
         assert note["ExtraExamples"] == "The Arctic expedition lasted three months."
         assert note["Collocations"] == "go on an expedition · Arctic expedition"
         assert note["SenseLabel"] == "Reise"
+    finally:
+        col.close()
+
+
+def test_approve_backfills_alt_fields_from_translation_cache(
+    http_client: TestClient, tmp_path: Path
+):
+    # Equivalence-class follow-up to #58: pre-#60 needs-review entries lack the
+    # alt_* fields. Approving them must backfill from translate_with_cache so
+    # the new card already shows the idiomatic-alternative block.
+    storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
+    anki_writer = AnkiWriter(root=tmp_path / "anki")
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+
+    create = http_client.post(
+        "/vocab",
+        json={"word": "weary", "sentence": "I felt weary after the hike."},
+        headers={"X-authentik-username": "alice"},
+    )
+    assert create.status_code == 201
+    entry_id = create.json()["id"]
+
+    from vocab_api.gemini import _sentence_hash  # noqa: PLC0415 — local helper, test-only use
+
+    sh = _sentence_hash("I felt weary after the hike.")
+    assert sh is not None
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE vocab.entry SET status='needs-review',"
+                    " cloze_sentence='I felt ___ after the hike.',"
+                    " extra_examples='legacy', collocations='legacy',"
+                    " sense_label='legacy',"
+                    " alt_lemma=NULL, alt_reason=NULL, alt_translation=NULL,"
+                    " alt_ipa=NULL, alt_examples=NULL, alt_audio_url=NULL"
+                    f" WHERE id = {entry_id}"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.translation_cache"
+                    " (word, sentence_hash, lang, lemma, translation,"
+                    "  alternatives, ipa, sense_key, sense_label,"
+                    "  collocations, extra_examples,"
+                    "  alt_lemma, alt_reason, alt_translation, alt_ipa,"
+                    "  alt_examples, alt_priority)"
+                    " VALUES ('weary', :sh, 'en', 'weary', 'müde',"
+                    " '', '', 'adj-tired', 'müde',"
+                    " 'go weary', 'I grow weary of this.',"
+                    " 'exhausted', 'dated', 'erschöpft', '/ɪɡˈzɔːstɪd/',"
+                    " 'She was exhausted after the hike.', 'preferred')"
+                ),
+                {"sh": sh},
+            )
+
+    asyncio.run(_seed())
+
+    response = http_client.post(
+        f"/vocab/{entry_id}/approve",
+        json={"lemma": "weary", "translation": "müde"},
+        headers={"X-authentik-username": "alice"},
+    )
+
+    assert response.status_code == 200, response.text
+    card_id = response.json()["anki_card_id"]
+    col = Collection(str(tmp_path / "anki" / "alice" / "collection.anki2"))
+    try:
+        note = col.get_card(card_id).note()
+        assert note["AltLemma"] == "exhausted"
+        assert note["AltReason"] == "dated"
+        assert note["AltTranslation"] == "erschöpft"
+        assert note["AltIPA"] == "/ɪɡˈzɔːstɪd/"
+        assert note["AltExamples"] == "She was exhausted after the hike."
+        # AltAudio: synthesized by approve flow when alt_lemma was backfilled.
+        assert note["AltAudio"].startswith("[sound:")
     finally:
         col.close()
 

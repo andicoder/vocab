@@ -15,6 +15,7 @@ from .cloze import populate_cloze
 from .gemini import (
     GeminiClient,
     TranslationRequest,
+    TranslationResult,
     join_collocations,
     join_extra_examples,
     translate_with_cache,
@@ -111,19 +112,28 @@ async def process_entry(
         storage=deps.storage,
         request=AudioRequest(word=translation.lemma, voice=deps.voice, lang=entry.lang),
     )
+    # Synthesize the alt-lemma audio in the same flow so the card already
+    # has both pronunciation cues when it lands. Skipped for the common
+    # case where Gemini reports no idiomatic alternative.
+    alt_audio_url: str | None = None
+    if translation.alt_lemma:
+        alt_audio_url = await synthesize_with_cache(
+            session=session,
+            cache_session_factory=deps.cache_session_factory,
+            tts=deps.tts,
+            storage=deps.storage,
+            request=AudioRequest(word=translation.alt_lemma, voice=deps.voice, lang=entry.lang),
+        )
     await populate_cloze(entry, gemini=deps.gemini, lemma=translation.lemma)
+    _populate_entry_from_translation(
+        entry, translation, audio_url=audio_url, alt_audio_url=alt_audio_url
+    )
 
-    entry.lemma = translation.lemma
-    entry.translation = translation.translation
-    entry.alternatives = translation.alternatives
-    entry.ipa = translation.ipa
-    entry.sense_key = translation.sense_key
-    entry.sense_label = translation.sense_label or None
-    entry.collocations = join_collocations(translation.collocations) or None
-    entry.extra_examples = join_extra_examples(translation.extra_examples) or None
-    entry.audio_url = audio_url
-
-    if verdict == "YES":
+    # A "preferred" alternative overrides the plausibility verdict: the
+    # translation makes sense, but the encountered word isn't the one we
+    # actually want to learn. Hold it for review so I can confirm before the
+    # card hits Anki (#60).
+    if verdict == "YES" and translation.alt_priority != "preferred":
         await write_entry_to_anki(
             entry=entry,
             user=user,
@@ -131,6 +141,7 @@ async def process_entry(
                 storage=deps.storage,
                 anki_writer=deps.anki_writer,
                 gemini=deps.gemini,
+                tts=deps.tts,
                 cache_session_factory=deps.cache_session_factory,
                 voice=deps.voice,
             ),
@@ -151,6 +162,36 @@ async def process_entry(
             verdict,
         )
     return None
+
+
+def _populate_entry_from_translation(
+    entry: Entry,
+    translation: TranslationResult,
+    *,
+    audio_url: str,
+    alt_audio_url: str | None,
+) -> None:
+    """Copy the worker-resolved translation + audio URLs onto `entry`.
+
+    Pure column assignment — pulled out so `process_entry` stays below
+    ruff's PLR0915 statement budget; logic still lives end-to-end in the
+    caller."""
+    entry.lemma = translation.lemma
+    entry.translation = translation.translation
+    entry.alternatives = translation.alternatives
+    entry.ipa = translation.ipa
+    entry.sense_key = translation.sense_key
+    entry.sense_label = translation.sense_label or None
+    entry.collocations = join_collocations(translation.collocations) or None
+    entry.extra_examples = join_extra_examples(translation.extra_examples) or None
+    entry.audio_url = audio_url
+    entry.alt_lemma = translation.alt_lemma or None
+    entry.alt_reason = translation.alt_reason or None
+    entry.alt_translation = translation.alt_translation or None
+    entry.alt_ipa = translation.alt_ipa or None
+    entry.alt_examples = join_extra_examples(translation.alt_examples) or None
+    entry.alt_audio_url = alt_audio_url
+    entry.alt_priority = translation.alt_priority or None
 
 
 async def _sense_already_exists(  # noqa: PLR0913 — six narrow scalars are clearer than a one-call-site dataclass

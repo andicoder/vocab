@@ -31,6 +31,13 @@ def _content(**overrides: object) -> VocabCardContent:
         "audio_data": None,
         "audio_filename": None,
         "source": None,
+        "alt_lemma": "",
+        "alt_reason": "",
+        "alt_translation": "",
+        "alt_ipa": "",
+        "alt_examples": "",
+        "alt_audio_data": None,
+        "alt_audio_filename": None,
     }
     base.update(overrides)
     return VocabCardContent(**base)  # type: ignore[arg-type]
@@ -520,6 +527,71 @@ async def test_legacy_card1_template_is_renamed_to_de_en(tmp_path: Path):
         assert model is not None
         names = [t["name"] for t in model["tmpls"]]
         assert names == ["DE→EN"]
+    finally:
+        col.close()
+
+
+async def test_alt_fields_persist_to_note_and_render_conditionally(tmp_path: Path):
+    # When a more idiomatic alternative exists (#60), the card carries an
+    # extra block: marker line ("dated — more common: …"), alt IPA + translation,
+    # alt examples and an alt audio button. The whole block is wrapped in
+    # `{{#AltLemma}}…{{/AltLemma}}` so cards without an alt look unchanged.
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            word="weary",
+            lemma="weary",
+            translation="müde",
+            alt_lemma="exhausted",
+            alt_reason="dated",
+            alt_translation="erschöpft",
+            alt_ipa="/ɪɡˈzɔːstɪd/",
+            alt_examples=(
+                "She was exhausted after the hike.<br>I'm too exhausted to cook tonight."
+            ),
+            alt_audio_data=b"FAKE-MP3-ALT",
+            alt_audio_filename="alt123.mp3",
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note = col.get_card(card_id).note()
+        assert note["AltLemma"] == "exhausted"
+        assert note["AltReason"] == "dated"
+        assert note["AltTranslation"] == "erschöpft"
+        assert note["AltIPA"] == "/ɪɡˈzɔːstɪd/"
+        assert note["AltExamples"] == (
+            "She was exhausted after the hike.<br>I'm too exhausted to cook tonight."
+        )
+        assert note["AltAudio"] == "[sound:alt123.mp3]"
+
+        model = col.models.by_name(VOCAB_NOTETYPE)
+        assert model is not None
+        afmt = model["tmpls"][0]["afmt"]
+        # Conditional block: hidden when AltLemma empty (the common case).
+        assert "{{#AltLemma}}" in afmt and "{{/AltLemma}}" in afmt
+        assert "{{AltLemma}}" in afmt
+        assert "{{AltTranslation}}" in afmt
+        assert "{{AltReason}}" in afmt
+        assert "{{AltAudio}}" in afmt
+    finally:
+        col.close()
+
+    # Alt-audio media file lands alongside the primary audio.
+    assert (tmp_path / "alice" / "collection.media" / "alt123.mp3").read_bytes() == b"FAKE-MP3-ALT"
+
+
+async def test_card_without_alt_lemma_has_empty_alt_fields(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note = col.get_card(card_id).note()
+        assert note["AltLemma"] == ""
+        assert note["AltAudio"] == ""
     finally:
         col.close()
 
