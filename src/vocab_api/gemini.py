@@ -6,8 +6,8 @@ from typing import Any, Literal, cast
 
 import httpx
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import ColumnElement, and_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .models import TranslationCache
@@ -242,6 +242,27 @@ def _sentence_hash(sentence: str | None) -> str | None:
     return hashlib.sha256(sentence.encode("utf-8")).hexdigest()
 
 
+def _cache_row_is_fresh() -> ColumnElement[bool]:
+    """Predicate that distinguishes fresh post-#60 cache rows from stale ones.
+
+    A row counts as fresh when it has at least one of `collocations` /
+    `extra_examples` populated (#43 — migrations 42b43fa4406f /
+    a4eb60988a1a backfilled pre-existing rows with `''`) AND a non-empty
+    `alt_priority` (#60 — the post-idiomaticity worker always emits one
+    of {'preferred','minor','none'}, so `''` reliably flags a pre-#60 row).
+    Used both as the WHERE filter on the cache SELECT and — negated — as
+    the WHERE on the upsert's DO UPDATE, so a stale row gets refreshed in
+    place while a fresh row that lost the UNIQUE race against a concurrent
+    fresh writer is left alone (preserves the previous `except
+    IntegrityError pass` no-op for that race). Read/write share one
+    predicate so adding a future freshness signal can't drift between the
+    two paths (#64 lesson)."""
+    return and_(
+        ~((TranslationCache.collocations == "") & (TranslationCache.extra_examples == "")),
+        TranslationCache.alt_priority != "",
+    )
+
+
 async def translate_with_cache(
     *,
     session: AsyncSession,
@@ -256,18 +277,7 @@ async def translate_with_cache(
         if sh is None
         else TranslationCache.sentence_hash == sh,
         TranslationCache.lang == request.lang,
-        # Migrations 42b43fa4406f / a4eb60988a1a backfilled `collocations`
-        # and `extra_examples` on pre-existing rows with `''`. Treating such
-        # a row as a cache hit would permanently freeze the affected words
-        # at empty collocations/examples (#43). At least one of the two
-        # must be populated for a row to count as fresh; rows from the
-        # post-0.3 worker always satisfy this for any vocabulary-like word.
-        ~((TranslationCache.collocations == "") & (TranslationCache.extra_examples == "")),
-        # Same idea for the idiomatic-alternative payload (#60): rows from
-        # before that migration have `alt_priority = ''`. The post-#60 worker
-        # always emits one of {"preferred","minor","none"}, so a non-empty
-        # value reliably distinguishes fresh rows from pre-#60 ones.
-        TranslationCache.alt_priority != "",
+        _cache_row_is_fresh(),
     )
     cached = (await session.execute(stmt)).scalar_one_or_none()
     if cached is not None:
@@ -289,32 +299,38 @@ async def translate_with_cache(
         )
 
     result = await gemini.translate(word=request.word, sentence=request.sentence)
-    # Commit the cache row through a fresh session so it survives a rollback
-    # of the outer entry transaction (see #6). UNIQUE constraint makes this
-    # idempotent under concurrent writes for the same request.
-    try:
-        async with cache_session_factory() as cache_session, cache_session.begin():
-            cache_session.add(
-                TranslationCache(
-                    word=request.word,
-                    sentence_hash=sh,
-                    lang=request.lang,
-                    lemma=result.lemma,
-                    translation=result.translation,
-                    alternatives=result.alternatives,
-                    ipa=result.ipa,
-                    sense_key=result.sense_key,
-                    sense_label=result.sense_label,
-                    collocations=join_collocations(result.collocations),
-                    extra_examples=join_extra_examples(result.extra_examples),
-                    alt_lemma=result.alt_lemma,
-                    alt_reason=result.alt_reason,
-                    alt_translation=result.alt_translation,
-                    alt_ipa=result.alt_ipa,
-                    alt_examples=join_extra_examples(result.alt_examples),
-                    alt_priority=result.alt_priority,
-                )
-            )
-    except IntegrityError:
-        pass
+    values = {
+        "word": request.word,
+        "sentence_hash": sh,
+        "lang": request.lang,
+        "lemma": result.lemma,
+        "translation": result.translation,
+        "alternatives": result.alternatives,
+        "ipa": result.ipa,
+        "sense_key": result.sense_key,
+        "sense_label": result.sense_label,
+        "collocations": join_collocations(result.collocations),
+        "extra_examples": join_extra_examples(result.extra_examples),
+        "alt_lemma": result.alt_lemma,
+        "alt_reason": result.alt_reason,
+        "alt_translation": result.alt_translation,
+        "alt_ipa": result.alt_ipa,
+        "alt_examples": join_extra_examples(result.alt_examples),
+        "alt_priority": result.alt_priority,
+    }
+    insert_stmt = pg_insert(TranslationCache).values(**values)
+    refresh_cols = {
+        col: insert_stmt.excluded[col]
+        for col in values
+        if col not in ("word", "sentence_hash", "lang")
+    }
+    upsert_stmt = insert_stmt.on_conflict_do_update(
+        constraint="uq_translation_cache_word_sentence_lang",
+        set_=refresh_cols,
+        where=~_cache_row_is_fresh(),
+    )
+    # Commit through a fresh session so the cache row survives a rollback of
+    # the outer entry transaction (#6).
+    async with cache_session_factory() as cache_session, cache_session.begin():
+        await cache_session.execute(upsert_stmt)
     return result
