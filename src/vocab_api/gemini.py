@@ -102,13 +102,17 @@ of the English word in context, then return JSON:
     should be surfaced. One of:
     * "preferred" — the lemma is clearly dated, overly formal, rare or
         regional, and a native speaker would naturally reach for `alt_lemma`
-        instead in everyday speech.
+        instead in everyday speech. Examples worth flagging: `beneath` →
+        `under` (formal), `deride` → `ridicule` (formal), `unmoored` →
+        `disoriented` (rare in everyday speech).
     * "minor" — `alt_lemma` is a slightly more common register or stylistic
-        variant; both are perfectly acceptable.
+        variant; both are perfectly acceptable. Example: `enthralled` →
+        `captivated` (both literary, the latter slightly more common).
     * "none" — the lemma is in normal everyday use; no alternative is
         warranted (leave `alt_lemma` and the other alt_* fields empty).
-    Be conservative: prefer "none" when in doubt, prefer "minor" over
-    "preferred" unless the gap in everyday use is clear.
+    Default to flagging legitimately formal/rare/dated lemmas — that is
+    the feature's whole point. Only prefer "none" when the lemma is
+    already common everyday English OR when one of the rules below applies.
     Do NOT flag (always return "none" in these cases):
     * AE/BE orthographic variants — both spellings are standard everyday
         English; neither is dated, formal, or rare. Examples:
@@ -118,11 +122,13 @@ of the English word in context, then return JSON:
         a prefix or suffix attached (e.g. `conscious` → `self-conscious`,
         `aware` → `self-aware`). These are distinct concepts, not register
         variants — flagging them misleads the learner.
-    * Near-synonyms that narrow or shift the meaning. Only suggest an
-        alternative when it preserves the specific sense the lemma carries
-        in this sentence. Counter-example: `oblige` in "he obliged" means
-        "complied with the request" — `help` loses that specific nuance,
-        so leave the alt empty.
+    * Alternatives that strip a distinct sense the lemma carries in this
+        sentence. Slight register or formality shifts where the core
+        meaning is preserved are exactly what to flag. Counter-example:
+        `oblige` in "he obliged" carries the specific "complied with the
+        request" sense — `help` would lose that, so leave the alt empty.
+        But do NOT use this rule to suppress legitimate register-only
+        substitutions like `beneath → under`.
 - alt_lemma: the more idiomatic English word or short phrase (lowercase,
     dictionary form). Empty string when alt_priority is "none".
 - alt_reason: one short tag explaining why the original lemma was flagged

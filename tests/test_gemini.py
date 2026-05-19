@@ -558,6 +558,13 @@ def test_translate_prompt_documents_alt_classification_negative_rules():
     assert "compound" in prompt.lower(), (
         "prompt must explicitly tell Gemini not to suggest compound expansions"
     )
-    assert "narrow" in prompt.lower() or "nuance" in prompt.lower(), (
-        "prompt must warn against alternatives that narrow or shift the meaning"
+    assert "strip a distinct sense" in prompt.lower() or "narrow" in prompt.lower(), (
+        "prompt must warn against alternatives that strip a sense the lemma carries"
+    )
+    # After the post-merge calibration (#63 smoke test): the prompt must
+    # also positively show what to flag, otherwise the negative rules tip
+    # Gemini into refusing every alt (`beneath → under` got dropped).
+    assert "beneath" in prompt.lower(), (
+        "prompt must keep concrete positive examples (e.g. `beneath → under`) "
+        "to balance the negative rules and prevent over-conservatism"
     )

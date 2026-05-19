@@ -18,6 +18,18 @@ _DB_FIXTURES = frozenset({"db_session", "http_client"})
 _migrations_done = False
 
 
+@pytest.fixture(autouse=True)
+def _isolate_gemini_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Tests must be deterministic regardless of a developer's local .env.
+    # When `gemini_api_key` is non-empty, routes like POST /vocab call the
+    # real API synchronously and persist a cache row — which then collides
+    # with seeded fixtures (`uq_translation_cache_word_sentence_lang`).
+    # Default the key to empty for every test; tests that need to exercise
+    # the active-Gemini code path opt in via their own monkeypatch (see
+    # test_ui.py for the pattern).
+    monkeypatch.setattr(settings, "gemini_api_key", "")
+
+
 def _needs_db(request: pytest.FixtureRequest) -> bool:
     return bool(_DB_FIXTURES.intersection(request.fixturenames))
 
