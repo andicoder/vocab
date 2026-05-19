@@ -109,6 +109,20 @@ of the English word in context, then return JSON:
         warranted (leave `alt_lemma` and the other alt_* fields empty).
     Be conservative: prefer "none" when in doubt, prefer "minor" over
     "preferred" unless the gap in everyday use is clear.
+    Do NOT flag (always return "none" in these cases):
+    * AE/BE orthographic variants — both spellings are standard everyday
+        English; neither is dated, formal, or rare. Examples:
+        `toward`/`towards`, `color`/`colour`, `organize`/`organise`,
+        `center`/`centre`, `gray`/`grey`, `analyze`/`analyse`.
+    * Compound expansions where the alternative would be the lemma with
+        a prefix or suffix attached (e.g. `conscious` → `self-conscious`,
+        `aware` → `self-aware`). These are distinct concepts, not register
+        variants — flagging them misleads the learner.
+    * Near-synonyms that narrow or shift the meaning. Only suggest an
+        alternative when it preserves the specific sense the lemma carries
+        in this sentence. Counter-example: `oblige` in "he obliged" means
+        "complied with the request" — `help` loses that specific nuance,
+        so leave the alt empty.
 - alt_lemma: the more idiomatic English word or short phrase (lowercase,
     dictionary form). Empty string when alt_priority is "none".
 - alt_reason: one short tag explaining why the original lemma was flagged
@@ -263,6 +277,72 @@ def _cache_row_is_fresh() -> ColumnElement[bool]:
     )
 
 
+# AE/BE orthographic suffix pairs that pair up to the *same* word. The
+# prompt is asked to filter these too (#63), but Gemini still slips them
+# through occasionally — this deterministic backstop catches the common
+# patterns so the learner never sees `toward → towards` as a "more
+# idiomatic alternative". Single-letter variants (`gray`/`grey`,
+# `defense`/`defence`) are rarer and left to the prompt.
+_AE_BE_SUFFIX_PAIRS: tuple[tuple[str, str], ...] = (
+    ("or", "our"),  # color/colour, behavior/behaviour
+    ("ize", "ise"),  # organize/organise
+    ("er", "re"),  # center/centre, theater/theatre
+    ("yze", "yse"),  # analyze/analyse
+    ("og", "ogue"),  # catalog/catalogue
+)
+
+
+def _is_ae_be_variant(lemma: str, alt: str) -> bool:
+    if alt == lemma + "s" or lemma == alt + "s":
+        return True
+    for left, right in _AE_BE_SUFFIX_PAIRS:
+        if lemma.endswith(left) and alt == lemma[: -len(left)] + right:
+            return True
+        if alt.endswith(left) and lemma == alt[: -len(left)] + right:
+            return True
+    return False
+
+
+def _is_compound_expansion(lemma: str, alt: str) -> bool:
+    """True when `alt` is a hyphen-joined compound containing `lemma` as
+    one of its components (or vice versa). `conscious` ↔ `self-conscious`
+    is the canonical case from #63 — these are different concepts, not
+    register variants, and surfacing one as an alternative for the other
+    misleads the learner."""
+    return lemma in alt.split("-") or alt in lemma.split("-")
+
+
+def _strip_low_value_alt(result: TranslationResult) -> TranslationResult:
+    """Drop the idiomatic-alt payload when the (lemma, alt_lemma) pair
+    matches a known false-positive pattern (#63).
+
+    Two deterministic patterns are caught here as a backstop against the
+    prompt: AE/BE orthographic variants and hyphen-compound expansions.
+    Meaning-narrowing alternatives (`oblige → help`) are not detectable
+    deterministically and rely on the prompt's "do not flag" rules.
+
+    Applied both at fresh-translate write time and at cache-hit read time
+    so pre-existing cache rows containing false-positive alts self-heal
+    without a schema migration."""
+    if not result.alt_lemma:
+        return result
+    if not (
+        _is_ae_be_variant(result.lemma, result.alt_lemma)
+        or _is_compound_expansion(result.lemma, result.alt_lemma)
+    ):
+        return result
+    return result.model_copy(
+        update={
+            "alt_lemma": "",
+            "alt_reason": "",
+            "alt_translation": "",
+            "alt_ipa": "",
+            "alt_examples": [],
+            "alt_priority": "none",
+        }
+    )
+
+
 async def translate_with_cache(
     *,
     session: AsyncSession,
@@ -281,24 +361,31 @@ async def translate_with_cache(
     )
     cached = (await session.execute(stmt)).scalar_one_or_none()
     if cached is not None:
-        return TranslationResult(
-            lemma=cached.lemma,
-            translation=cached.translation,
-            alternatives=cached.alternatives,
-            ipa=cached.ipa,
-            sense_key=cached.sense_key,
-            sense_label=cached.sense_label,
-            collocations=split_collocations(cached.collocations),
-            extra_examples=split_extra_examples(cached.extra_examples),
-            alt_lemma=cached.alt_lemma,
-            alt_reason=cached.alt_reason,
-            alt_translation=cached.alt_translation,
-            alt_ipa=cached.alt_ipa,
-            alt_examples=split_extra_examples(cached.alt_examples),
-            alt_priority=cached.alt_priority,
+        # Filter applied at read time too so cache rows written before #63
+        # self-heal: old false-positive alts get stripped on every fetch
+        # without needing a schema migration or bulk re-translate.
+        return _strip_low_value_alt(
+            TranslationResult(
+                lemma=cached.lemma,
+                translation=cached.translation,
+                alternatives=cached.alternatives,
+                ipa=cached.ipa,
+                sense_key=cached.sense_key,
+                sense_label=cached.sense_label,
+                collocations=split_collocations(cached.collocations),
+                extra_examples=split_extra_examples(cached.extra_examples),
+                alt_lemma=cached.alt_lemma,
+                alt_reason=cached.alt_reason,
+                alt_translation=cached.alt_translation,
+                alt_ipa=cached.alt_ipa,
+                alt_examples=split_extra_examples(cached.alt_examples),
+                alt_priority=cached.alt_priority,
+            )
         )
 
-    result = await gemini.translate(word=request.word, sentence=request.sentence)
+    result = _strip_low_value_alt(
+        await gemini.translate(word=request.word, sentence=request.sentence)
+    )
     values = {
         "word": request.word,
         "sentence_hash": sh,
