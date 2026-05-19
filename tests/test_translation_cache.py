@@ -377,6 +377,109 @@ async def test_stale_cache_row_is_refreshed_on_miss(db_session: AsyncSession):
     assert row.alt_lemma == "tired"
 
 
+async def test_cache_hit_strips_false_positive_alt(db_session: AsyncSession):
+    # Regression for #63: cache rows written before the deterministic
+    # alt-filter shipped (e.g. `toward` → `towards`, `conscious` →
+    # `self-conscious`) still live in the DB. On every fetch, the cache
+    # layer applies the filter so the worker never sees those false-
+    # positive alts again — self-healing without a schema migration.
+    # Setup committed via a separate session for the cross-connection
+    # UNIQUE deadlock reason explained on the #43 test above.
+    async with SessionLocal() as setup, setup.begin():
+        setup.add(
+            TranslationCache(
+                word="toward",
+                sentence_hash=None,
+                lang="en",
+                lemma="toward",
+                translation="zu",
+                alternatives="",
+                ipa="/təˈwɔːrd/",
+                collocations="walked toward the door",
+                extra_examples="She moved toward the exit.",
+                alt_lemma="towards",
+                alt_reason="stylistic-variant",
+                alt_translation="zu",
+                alt_ipa="/təˈwɔːrdz/",
+                alt_examples="He walked towards the door.",
+                alt_priority="minor",
+            )
+        )
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=_gemini_response(_payload()))
+
+    gemini, http = _client(handler)
+    try:
+        result = await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="toward", sentence=None),
+        )
+    finally:
+        await http.aclose()
+
+    assert calls == 0, "filtered alt is still a cache hit; no Gemini call needed"
+    assert result.alt_lemma == "", "AE/BE false-positive alt must be stripped on read"
+    assert result.alt_priority == "none"
+
+
+async def test_fresh_translate_strips_false_positive_alt_before_caching(
+    db_session: AsyncSession,
+):
+    # Companion to test_cache_hit_strips_false_positive_alt: new translations
+    # are filtered before they hit the cache, so a false-positive alt from
+    # Gemini never gets persisted in the first place. Belt-and-braces with
+    # the on-read filter — but it matters for downstream consumers that may
+    # query the cache table directly (debugging dashboards, manual SQL).
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.dumps(
+            {
+                "lemma": "conscious",
+                "translation": "bewusst",
+                "alternatives": "",
+                "ipa": "/ˈkɒnʃəs/",
+                "collocations": ["fully conscious"],
+                "extra_examples": ["She was conscious of the noise."],
+                "alt_lemma": "self-conscious",
+                "alt_reason": "compound-adjective",
+                "alt_translation": "selbstbewusst",
+                "alt_ipa": "/sɛlfˈkɒnʃəs/",
+                "alt_examples": ["He felt self-conscious in the crowd."],
+                "alt_priority": "preferred",
+            }
+        )
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    gemini, http = _client(handler)
+    try:
+        result = await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="conscious", sentence=None),
+        )
+    finally:
+        await http.aclose()
+
+    assert result.alt_lemma == ""
+    assert result.alt_priority == "none"
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TranslationCache).where(TranslationCache.word == "conscious")
+        )
+    ).scalar_one()
+    assert row.alt_lemma == "", "filter must run before cache write, not only on read"
+    assert row.alt_priority == "none"
+
+
 async def test_cache_with_no_sentence_uses_null_hash(db_session: AsyncSession):
     calls = 0
 

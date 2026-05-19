@@ -3,7 +3,14 @@ import json
 import httpx
 import pytest
 
-from vocab_api.gemini import GeminiClient, InventedExample, Plausibility, TranslationResult
+from vocab_api.gemini import (
+    _TRANSLATE_PROMPT,
+    GeminiClient,
+    InventedExample,
+    Plausibility,
+    TranslationResult,
+    _strip_low_value_alt,
+)
 
 
 def _gemini_response(text: str) -> dict:
@@ -436,3 +443,128 @@ async def test_invent_example_prompt_includes_lemma_and_asks_for_json():
     assert "expedition" in prompt_text
     assert "___" in prompt_text  # the prompt must instruct the model on the gap marker
     assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
+
+
+# --- #63: deterministic post-filter for alt-classification false positives ---
+
+
+def _alt_result(lemma: str, alt_lemma: str, *, alt_priority: str = "minor") -> TranslationResult:
+    return TranslationResult(
+        lemma=lemma,
+        translation="(german)",
+        alternatives="",
+        ipa="",
+        alt_lemma=alt_lemma,
+        alt_reason="stylistic",
+        alt_translation="(alt german)",
+        alt_ipa="/alt/",
+        alt_examples=["example sentence"],
+        alt_priority=alt_priority,
+    )
+
+
+@pytest.mark.parametrize(
+    ("lemma", "alt_lemma"),
+    [
+        # AE/BE +s suffix — dominant case from #63 (toward/towards).
+        ("toward", "towards"),
+        ("towards", "toward"),
+        ("forward", "forwards"),
+        # AE/BE suffix swaps documented in the issue ("presumably also …").
+        ("color", "colour"),
+        ("colour", "color"),
+        ("organize", "organise"),
+        ("organise", "organize"),
+        ("center", "centre"),
+        ("centre", "center"),
+        ("analyze", "analyse"),
+        ("catalog", "catalogue"),
+    ],
+)
+def test_strip_low_value_alt_drops_ae_be_orthographic_variants(lemma: str, alt_lemma: str):
+    result = _alt_result(lemma, alt_lemma)
+    cleaned = _strip_low_value_alt(result)
+    assert cleaned.alt_lemma == ""
+    assert cleaned.alt_priority == "none"
+    assert cleaned.alt_reason == ""
+    assert cleaned.alt_translation == ""
+    assert cleaned.alt_ipa == ""
+    assert cleaned.alt_examples == []
+
+
+@pytest.mark.parametrize(
+    ("lemma", "alt_lemma"),
+    [
+        # Compound expansion via hyphen — the lemma is a component of the
+        # compound, not a register variant. Documented case from #63:
+        # `conscious → self-conscious`.
+        ("conscious", "self-conscious"),
+        ("aware", "self-aware"),
+        ("aware", "self-aware-ish"),
+        ("contained", "self-contained"),
+        # The reverse direction too: `self-aware → aware` would also be a
+        # compound relation, just dropped from the other side.
+        ("self-conscious", "conscious"),
+    ],
+)
+def test_strip_low_value_alt_drops_compound_expansions(lemma: str, alt_lemma: str):
+    result = _alt_result(lemma, alt_lemma)
+    cleaned = _strip_low_value_alt(result)
+    assert cleaned.alt_lemma == ""
+    assert cleaned.alt_priority == "none"
+
+
+@pytest.mark.parametrize(
+    ("lemma", "alt_lemma"),
+    [
+        # Legitimate alts from #63's "correct flags" list. These are
+        # register/formality reductions where the meaning is preserved
+        # (or close enough for a learner).
+        ("beneath", "under"),
+        ("deride", "ridicule"),
+        ("unmoored", "disoriented"),
+        ("enthralled", "captivated"),
+        ("erect", "build"),
+    ],
+)
+def test_strip_low_value_alt_preserves_legitimate_alternatives(lemma: str, alt_lemma: str):
+    result = _alt_result(lemma, alt_lemma, alt_priority="minor")
+    cleaned = _strip_low_value_alt(result)
+    assert cleaned.alt_lemma == alt_lemma, "legitimate alts must not be dropped"
+    assert cleaned.alt_priority == "minor"
+
+
+def test_strip_low_value_alt_is_noop_when_no_alt():
+    result = TranslationResult(
+        lemma="hello",
+        translation="hallo",
+        alternatives="",
+        ipa="",
+        alt_priority="none",
+    )
+    assert _strip_low_value_alt(result) == result
+
+
+def test_translate_prompt_documents_alt_classification_negative_rules():
+    # #63: pin the three negative rules into the prompt as a regression
+    # guard. The deterministic filter catches AE/BE +s suffixes and
+    # compound expansions, but the prompt is the only line of defense
+    # against meaning-narrowing alternatives (`oblige → help`) and against
+    # the less-common AE/BE patterns the filter does not enumerate.
+    prompt = _TRANSLATE_PROMPT
+    assert "AE/BE" in prompt or "American" in prompt, (
+        "prompt must explicitly tell Gemini not to flag AE/BE orthographic variants"
+    )
+    assert "compound" in prompt.lower(), (
+        "prompt must explicitly tell Gemini not to suggest compound expansions"
+    )
+    assert "strip a distinct sense" in prompt.lower() or "narrow" in prompt.lower(), (
+        "prompt must warn against alternatives that strip a sense the lemma carries"
+    )
+    # After the post-merge calibration (#63 smoke test): the prompt must
+    # also positively show what to flag, otherwise the negative rules tip
+    # Gemini into refusing every alt (`beneath → under` got dropped).
+    assert "beneath" in prompt.lower(), (
+        "prompt must keep concrete positive examples (e.g. `beneath → under`) "
+        "to balance the negative rules and prevent over-conservatism"
+    )
