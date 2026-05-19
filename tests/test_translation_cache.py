@@ -305,6 +305,78 @@ async def test_cache_row_with_only_one_field_populated_still_hits(
     assert result.extra_examples == ["However, the plan succeeded."]
 
 
+async def test_stale_cache_row_is_refreshed_on_miss(db_session: AsyncSession):
+    # Regression for #64: when the reader skips a stale pre-#60 row
+    # (`alt_priority=''`) and falls through to Gemini, the fresh row must
+    # *replace* the stale one on write. Previously the write path was
+    # `session.add(...) except IntegrityError: pass`, so the UNIQUE conflict
+    # against the stale row silently dropped the fresh result and the cache
+    # never self-healed. The fix is an upsert with a stale-only WHERE
+    # clause; this test pins the end-to-end behavior.
+    #
+    # Setup uses a separately committed session for the cross-connection
+    # unique-constraint deadlock reason explained on the #43 test above.
+    async with SessionLocal() as setup, setup.begin():
+        setup.add(
+            TranslationCache(
+                word="weary",
+                sentence_hash=None,
+                lang="en",
+                lemma="weary",
+                translation="STALE",
+                alternatives="",
+                ipa="",
+                collocations="legacy",
+                extra_examples="legacy",
+                alt_priority="",
+            )
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.dumps(
+            {
+                "lemma": "weary",
+                "translation": "müde",
+                "alternatives": "erschöpft",
+                "ipa": "/ˈwɪəri/",
+                "collocations": ["grow weary of"],
+                "extra_examples": ["She grew weary of the long debate."],
+                "alt_lemma": "tired",
+                "alt_reason": "more common",
+                "alt_translation": "müde",
+                "alt_ipa": "/ˈtaɪərd/",
+                "alt_examples": ["I'm tired."],
+                "alt_priority": "minor",
+            }
+        )
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    gemini, http = _client(handler)
+    try:
+        await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="weary", sentence=None),
+        )
+    finally:
+        await http.aclose()
+
+    # The outer test session sees committed rows from the inner cache session.
+    # Expire so we don't read a stale identity-map snapshot of the pre-upsert row.
+    db_session.expire_all()
+    rows = (
+        (await db_session.execute(select(TranslationCache).where(TranslationCache.word == "weary")))
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1, "upsert must replace the stale row, not insert a duplicate"
+    row = rows[0]
+    assert row.translation == "müde", "stale translation should have been overwritten"
+    assert row.alt_priority == "minor"
+    assert row.alt_lemma == "tired"
+
+
 async def test_cache_with_no_sentence_uses_null_hash(db_session: AsyncSession):
     calls = 0
 
