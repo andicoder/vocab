@@ -18,6 +18,10 @@ htmlcov/
 .env
 .env.local
 
+# Local runtime dirs created by the app on dev runs (audio_local_dir,
+# anki_collection_root, anki_shadow_root from settings).
+var/
+
 .idea/
 .vscode/
 *.swp
