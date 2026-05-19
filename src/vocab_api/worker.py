@@ -102,8 +102,13 @@ async def process_entry(
         await session.delete(entry)
         return translation.lemma
 
+    # Plausibility compares lemma-form against the lemma-form German
+    # translation. Passing the inflected encounter (`pebbles` vs `der
+    # Kiesel`) triggers spurious UNCLEAR/NO verdicts for any non-base form
+    # (#62). Every downstream field on the card is keyed off `lemma`, so
+    # plausibility being lemma-keyed too keeps the contract consistent.
     verdict = await deps.gemini.plausibility(
-        word=entry.word, sentence=entry.sentence, translation=translation
+        word=translation.lemma, sentence=entry.sentence, translation=translation
     )
     audio_url = await synthesize_with_cache(
         session=session,
