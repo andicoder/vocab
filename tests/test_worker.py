@@ -272,6 +272,69 @@ async def test_process_entry_uses_lemma_for_audio(db_session: AsyncSession, tmp_
     assert tts.calls == [("expedition", "en-US-AriaNeural")]
 
 
+async def test_plausibility_compares_lemma_against_translation(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # Regression for #62: the plausibility check used to pass `entry.word`
+    # (the inflected encounter, e.g. `pebbles`) against the lemma-form
+    # German translation (`der Kiesel`). A grammatically sensitive LLM
+    # then saw the number/tense mismatch and returned UNCLEAR/NO, routing
+    # the entry to needs-review even though the translation was correct.
+    # The fix is to compare lemma-form against lemma-form by passing
+    # `translation.lemma` to plausibility.
+    user, entry = await _make_pending_entry(
+        db_session,
+        word="pebbles",
+        sentence="Visitors had left pebbles, in keeping with Jewish tradition.",
+    )
+
+    plausibility_prompts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        kind = _classify(body)
+        prompt = body["contents"][0]["parts"][0]["text"]
+        if kind == "translate":
+            text = json.dumps(
+                {
+                    "lemma": "pebble",
+                    "translation": "der Kiesel",
+                    "alternatives": "",
+                    "ipa": "/ˈpɛbəl/",
+                    "collocations": ["throw pebbles"],
+                    "extra_examples": ["She skipped pebbles across the lake."],
+                    "alt_priority": "none",
+                }
+            )
+        elif kind == "invent":
+            text = json.dumps(_DEFAULT_INVENTED)
+        else:
+            plausibility_prompts.append(prompt)
+            text = "YES"
+        return httpx.Response(200, json=_gemini_response(text))
+
+    gemini, http = _gemini_client(handler)
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=_FakeTts(), storage=_FakeStorage()),
+        )
+    finally:
+        await http.aclose()
+
+    assert len(plausibility_prompts) == 1, "plausibility should be checked exactly once"
+    prompt = plausibility_prompts[0]
+    # Anchor with a trailing newline so `pebble` does not match `pebbles`.
+    assert "English word: pebble\n" in prompt, (
+        f"plausibility must compare lemma-form against translation; got:\n{prompt}"
+    )
+    assert "English word: pebbles\n" not in prompt, (
+        f"plausibility must not see the inflected encounter; got:\n{prompt}"
+    )
+
+
 async def test_process_entry_propagates_translation_error(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
 
