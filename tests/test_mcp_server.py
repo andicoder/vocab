@@ -100,18 +100,38 @@ def _configure_stub_deps():
 
 async def _call_tool(name: str, arguments: dict) -> dict | list:
     """Call an MCP tool by name and return its result."""
-    import json as _json
 
     import vocab_api.mcp_server as mcp_server
 
     result = await mcp_server.mcp.call_tool(name, arguments)
-    # call_tool returns either:
-    #   list[TextContent] — dict/single-value tools (unwrap text from first)
-    #   tuple(list[TextContent], dict) — list tools (unwrap 'result' key)
+    # call_tool returns different shapes depending on the tool and SDK version.
+    # Unwrap the actual payload regardless of the outer format.
+    payload = _unwrap_call_tool_result(result)
+    return payload
+
+
+def _unwrap_call_tool_result(result):
+    """Extract the actual tool result from whatever shape call_tool returned."""
+    import json as _json
+
+    # tuple(list[TextContent], dict): pick the structured dict
     if isinstance(result, tuple):
-        return result[1]["result"]
-    if isinstance(result, list) and len(result) > 0 and hasattr(result[0], "text"):
-        return _json.loads(result[0].text)
+        for item in result:
+            if isinstance(item, dict) and "result" in item:
+                return item["result"]
+            if isinstance(item, dict) and "content" in item:
+                return item
+        return result[1] if isinstance(result[1], dict) else result
+
+    # list[TextContent]: parse JSON from the first text block
+    if isinstance(result, list) and len(result) > 0:
+        if hasattr(result[0], "text"):
+            return _json.loads(result[0].text)
+        # Might already be a list of dicts
+        if isinstance(result[0], dict):
+            return result
+
+    # Already a dict or list — return as-is
     return result
 
 
