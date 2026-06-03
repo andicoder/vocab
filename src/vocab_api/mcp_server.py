@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 import httpx
 from sqlalchemy import select
@@ -77,7 +78,9 @@ async def _resolve_user(username: str) -> User:
 # Deferred import: FastMCP triggers a pydantic deprecation warning during
 # module import (pydantic v2 + mcp SDK compat). We import it here, after our
 # own config is loaded, so the warning appears early but is harmless.
-from mcp.server.fastmcp import Context as MCPContext, FastMCP  # noqa: E402, I001
+from mcp.server.fastmcp import Context, FastMCP  # noqa: E402, I001
+
+MCPContext = Context[Any, Any, Any]
 
 mcp = FastMCP(
     "vocab-api",
@@ -97,7 +100,7 @@ async def vocab_add(
     sentence: str | None = None,
     source: str | None = None,
     lang: str = "en",
-) -> dict:
+) -> dict[str, Any]:
     """Add a word to your vocab list.
 
     The 80 % use case: you encounter an unknown word in context — add it with
@@ -137,7 +140,7 @@ async def vocab_list(
     ctx: MCPContext,
     status: str | None = None,
     limit: int = 20,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List vocabulary entries, newest first.
 
     Filter by status ('pending', 'needs-review', 'synced', 'rejected') or
@@ -173,7 +176,7 @@ async def vocab_approve(  # noqa: PLR0913 — MCP tool signature is the client i
     translation: str | None = None,
     alternatives: str | None = None,
     ipa: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Approve a queued entry, creating its Anki card.
 
     You can override the auto-generated lemma, translation, alternatives, or
@@ -216,7 +219,7 @@ async def vocab_approve(  # noqa: PLR0913 — MCP tool signature is the client i
 async def vocab_reject(
     ctx: MCPContext,
     entry_id: int,
-) -> dict:
+) -> dict[str, Any]:
     """Reject a queued entry. The word will not get an Anki card."""
     _check_api_key(ctx)
 
@@ -236,7 +239,7 @@ async def vocab_translate(
     ctx: MCPContext,
     word: str,
     sentence: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Translate a word on-demand without saving it.
 
     Useful for quick lookups when you don't want to add the word to your list.
