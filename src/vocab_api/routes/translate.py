@@ -7,6 +7,7 @@ from ..auth import current_user
 from ..deps import get_gemini
 from ..gemini import GeminiClient, TranslationResult
 from ..models import User
+from ..vocab_service import translate_word
 
 router = APIRouter(tags=["translate"])
 
@@ -22,4 +23,4 @@ async def translate_on_demand(
     user: Annotated[User, Depends(current_user)],
     gemini: Annotated[GeminiClient, Depends(get_gemini)],
 ) -> TranslationResult:
-    return await gemini.translate(word=payload.word, sentence=payload.sentence)
+    return await translate_word(gemini=gemini, word=payload.word, sentence=payload.sentence)

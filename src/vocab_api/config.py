@@ -43,5 +43,11 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    # MCP server. When `mcp_api_key` is set, the MCP endpoint is mounted at
+    # `/mcp` (Streamable HTTP). `mcp_username` selects which vocab user the
+    # MCP tools act on behalf of (default: first matching user in the DB).
+    mcp_api_key: str = ""
+    mcp_username: str = "mcp"
+
 
 settings = Settings()
