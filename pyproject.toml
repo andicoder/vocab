@@ -23,7 +23,11 @@ dependencies = [
     "anki>=25.9",
     "jinja2>=3.1",
     "python-multipart>=0.0.20",
+    "mcp[cli]>=1.10",
 ]
+
+[project.scripts]
+vocab-mcp = "vocab_api.mcp_server:run"
 
 [project.optional-dependencies]
 dev = [
@@ -60,6 +64,10 @@ max-statements = 30
 # FastAPI route handlers receive their dependencies as parameters — that is the
 # framework's intended pattern, so the param-count rule does not apply there.
 "src/vocab_api/routes/*.py" = ["PLR0913"]
+# MCP tools define their public interface through function parameters; the
+# parameter count is dictated by the tool's semantic surface, not our code
+# organisation. Same logic as the FastAPI route carve-out above.
+"src/vocab_api/mcp_server.py" = ["PLR0913"]
 # Test fixtures sometimes need many setup args; keeping tests readable trumps
 # the rule. Tests also exercise branchy fixture builders; we trust readability
 # of the test body over the strict complexity ceiling for non-production code.
