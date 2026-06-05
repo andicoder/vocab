@@ -43,10 +43,11 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    # MCP server (stdio transport only — run via `vocab-mcp` console script).
-    # `mcp_api_key` is reserved for a future HTTP transport; it has no effect
-    # in the current stdio-only implementation.
-    # `mcp_username` selects which vocab user the MCP tools act on behalf of.
+    # MCP server. HTTP transport always mounted at /mcp (Streamable HTTP,
+    # stateless). When `mcp_api_key` is set, every tool call must supply it as
+    # `x-api-key` or `Authorization: Bearer` — leave it empty only on trusted
+    # private networks. Stdio transport: run `vocab-mcp` (no key needed).
+    # `mcp_username` selects which vocab user the tools act on behalf of.
     mcp_api_key: str = ""
     mcp_username: str = "mcp"
 

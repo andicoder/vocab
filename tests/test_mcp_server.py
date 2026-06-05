@@ -235,3 +235,69 @@ async def test_vocab_list_respects_limit(db_session):
 
     result = await _call_tool("vocab_list", {"limit": 3})
     assert len(result) == 3
+
+
+# ── HTTP transport auth tests ───────────────────────────────────────────────
+
+
+def _make_http_ctx(headers: dict[str, str]):
+    """Build a minimal MCPContext that looks like an HTTP request."""
+    from mcp.server.fastmcp import Context as MCPContext
+
+    class _FakeRequest:
+        pass
+
+    class _FakeRequestContext:
+        request = _FakeRequest()
+
+    fake_req = _FakeRequest()
+    fake_req.headers = headers  # type: ignore[attr-defined]
+    ctx = MCPContext.model_construct()
+    rc = _FakeRequestContext()
+    rc.request = fake_req
+    object.__setattr__(ctx, "_request_context", rc)
+    return ctx
+
+
+def test_check_api_key_passes_correct_bearer_token(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_api_key", "correct-secret")
+    from vocab_api.mcp_server import _check_api_key
+
+    ctx = _make_http_ctx({"authorization": "Bearer correct-secret"})
+    _check_api_key(ctx)  # must not raise
+
+
+def test_check_api_key_passes_correct_x_api_key_header(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_api_key", "correct-secret")
+    from vocab_api.mcp_server import _check_api_key
+
+    ctx = _make_http_ctx({"x-api-key": "correct-secret"})
+    _check_api_key(ctx)  # must not raise
+
+
+def test_check_api_key_rejects_wrong_bearer_token(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_api_key", "correct-secret")
+    from vocab_api.mcp_server import _check_api_key
+
+    ctx = _make_http_ctx({"authorization": "Bearer wrong-secret"})
+    with pytest.raises(PermissionError):
+        _check_api_key(ctx)
+
+
+def test_check_api_key_rejects_missing_auth_header(monkeypatch):
+    monkeypatch.setattr(settings, "mcp_api_key", "correct-secret")
+    from vocab_api.mcp_server import _check_api_key
+
+    ctx = _make_http_ctx({})
+    with pytest.raises(PermissionError):
+        _check_api_key(ctx)
+
+
+def test_mcp_is_mounted_at_mcp_path():
+    """The FastAPI app must expose a /mcp mount for HTTP transport."""
+    from starlette.routing import Mount
+
+    from vocab_api.main import app
+
+    mounts = [r for r in app.routes if isinstance(r, Mount) and r.path == "/mcp"]
+    assert mounts, "/mcp mount not found in app.routes"

@@ -1,6 +1,6 @@
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -14,6 +14,8 @@ from .audio import EdgeTtsClient, make_storage_from_settings
 from .config import settings
 from .db import SessionLocal
 from .gemini import GeminiClient
+from .mcp_server import configure_mcp
+from .mcp_server import mcp as _mcp
 from .routes import audio, imports, translate, ui, vocab
 from .routes import settings as settings_routes
 from .worker import WorkerDeps, run_worker
@@ -69,12 +71,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Stash on app.state so route handlers can build their own deps from the
     # same instances (see deps.get_worker_deps).
     app.state.worker_deps = deps
+    configure_mcp(deps)
 
     try:
-        if settings.gemini_api_key:
-            async with run_worker(session_factory=SessionLocal, deps=deps):
-                yield
-        else:
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(_mcp.session_manager.run())
+            if settings.gemini_api_key:
+                await stack.enter_async_context(run_worker(session_factory=SessionLocal, deps=deps))
             yield
     finally:
         await http_client.aclose()
@@ -82,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="vocab-api", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+app.mount("/mcp", _mcp.streamable_http_app())
 app.include_router(vocab.router)
 app.include_router(translate.router)
 app.include_router(audio.router)
