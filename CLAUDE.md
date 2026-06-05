@@ -2,9 +2,11 @@
 
 This file is loaded automatically by Claude Code when working in this repo. It complements the user-level global CLAUDE.md and the company-wide rules; use both.
 
+
 ## Discipline
 
-- **TDD.** Red → green → refactor. Add or change a failing test BEFORE adding production code. The exception is purely mechanical edits (rename, typo, formatting) and exploratory spikes that get reverted.
+TDD scope: everything under `tests/`. Clean-code applies (see global CLAUDE.md).
+
 - **Bug fixes target the equivalence class, not the reported symptom.** A bug report usually names one case — one field, one call site, one type, one status. Before writing the fix, identify the underlying pattern and enumerate the siblings that share it: other fields populated by the same code, other call sites of the same function, other branches with the same shape, other rows in the same state. Then decide for each sibling: fix in this PR, or file a follow-up issue *before* merging. Never merge a single-case fix without having looked at the siblings. Cautionary tale: #56 fixed missing `cloze_sentence` backfill in `apply_approve`. The real defect was "worker-only fields aren't backfilled on approve" — `extra_examples`, `collocations`, `sense_label` had the same bug and only surfaced as #58 a day later, after legacy entries had already been re-synced to Anki with empty fields. One PR's worth of broader thinking would have caught all four and avoided the dirty-data cleanup.
 - **Read/write pairs are siblings — touch one, touch the other.** A special case of the equivalence-class rule that has bitten this codebase twice now: when you change one side of a read/write pair (cache lookup vs. cache write, validator vs. sanitizer, encoder vs. decoder, serializer vs. parser), the other side is always on the sibling list. Either fix it in the same PR or write down explicitly why it doesn't need to move. Cautionary tale: #43 added a freshness gate to the cache `SELECT` in `translate_with_cache` (skip rows with empty `collocations`/`extras`). The write path — `session.add(...) except IntegrityError: pass` — was left naive, so any stale row the gate skipped silently lost the UNIQUE conflict on re-insert and the cache never refreshed. #60 then copied the same gate pattern (`alt_priority != ""`) without fixing the write path either; #64 surfaced the consequence weeks later: every pre-#60 word is re-translated on every import, forever. The right shape is an upsert (`ON CONFLICT DO UPDATE` with a `WHERE` clause that limits the refresh to stale rows) so the freshness condition lives in exactly one place and read/write stay structurally symmetric.
 - **Clean-code.** Small functions, intention-revealing names, single responsibility. If a function reads top-down, no helpers needed; reach for extraction when the same chunk recurs or the body grows past the soft limit below.
@@ -18,8 +20,6 @@ This file is loaded automatically by Claude Code when working in this repo. It c
 - **Type hints everywhere.** `mypy --strict`-clean. Any `Any` is a deliberate decision; document it.
 - **Lint-clean before commit.** `ruff check` + `ruff format` must pass.
 - **Prompt and worker-routing changes require a real import run before merge.** Mocked unit tests in `test_worker.py` / `test_gemini.py` verify wiring (this function called that function with these args), not LLM output quality or runtime routing distribution. Before merging any change to `_TRANSLATE_PROMPT`, `_PLAUSIBILITY_PROMPT`, `_INVENT_EXAMPLE_PROMPT`, or worker classification thresholds, run an actual import of ~50+ representative words (Kindle DB or extension flow) and spot-check the obvious distributions: `alt_priority` mix, needs-review ratio, cache-hit ratio against pre-existing rows, and a handful of individual entries by eye. Cautionary tale: #60 shipped without a real run; #62 (plausibility flags every inflected form), #63 (alt-classifier picks AE/BE variants and meaning-shifting alternatives) and #64 (cache never refreshes stale rows) were all visible within the first 500-word import after merge and would have been visible in one before.
-- **PRs, commits and issues are English.** Even when the conversation is in another language, issue titles, issue bodies, PR titles, PR bodies, commit subjects and commit bodies are written in English.
-
 ## Stack
 
 - Python 3.12+, FastAPI, SQLAlchemy 2.x async, asyncpg, Alembic, Pydantic v2 / pydantic-settings.
@@ -55,10 +55,7 @@ alembic upgrade head
 
 ## Issue / PR workflow
 
-- One issue → one branch → one PR. Do not bundle multiple GitHub issues into one branch, even when the diffs would be small. Each PR references the issue it closes in the body (`Fixes #N`).
-- Branch names: `fix/<slug>`, `feat/<slug>`, `chore/<slug>`. Slug is short, kebab-case, and reflects the change, not the ticket number.
-- The test that proves the fix and the fix itself land in the same PR (TDD: red → green in the same branch, not split across PRs).
-- Branch from `main`. Do not chain issue branches; rebase on `main` if it moves while the PR is open.
+Standard flow from global CLAUDE.md applies. TDD addition: the failing test and the fix land in the same PR — never split across PRs.
 
 ## Conventions specific to this codebase
 

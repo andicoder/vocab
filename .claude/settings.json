@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python *)",
+      "Bash(.venv/bin/pytest *)",
+      "Bash(.venv/bin/ruff *)",
+      "Bash(.venv/bin/mypy *)",
+      "Bash(.venv/bin/pip *)",
+      "Bash(.venv/bin/uvicorn *)",
+      "Bash(.venv/bin/alembic *)"
+    ]
+  }
+}
