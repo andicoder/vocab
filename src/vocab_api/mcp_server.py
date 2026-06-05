@@ -1,3 +1,4 @@
+import hmac
 import logging
 from typing import Any
 
@@ -275,7 +276,7 @@ def _check_api_key(ctx: MCPContext) -> None:
         auth = headers.get("authorization", "")
         if auth.startswith("Bearer "):
             api_key = auth.removeprefix("Bearer ")
-    if api_key != settings.mcp_api_key:
+    if not api_key or not hmac.compare_digest(api_key, settings.mcp_api_key):
         raise PermissionError("invalid or missing MCP API key")
 
 
