@@ -2,6 +2,7 @@ import json
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from vocab_api.config import settings
@@ -294,10 +295,11 @@ def test_check_api_key_rejects_missing_auth_header(monkeypatch):
 
 
 def test_mcp_is_mounted_at_mcp_path():
-    """The FastAPI app must expose a /mcp mount for HTTP transport."""
+    """The lifespan must mount the MCP streamable-http app at /mcp."""
     from starlette.routing import Mount
 
     from vocab_api.main import app
 
-    mounts = [r for r in app.routes if isinstance(r, Mount) and r.path == "/mcp"]
-    assert mounts, "/mcp mount not found in app.routes"
+    with TestClient(app):
+        mounts = [r for r in app.routes if isinstance(r, Mount) and r.path == "/mcp"]
+        assert mounts, "/mcp mount not found in app.routes after lifespan startup"
