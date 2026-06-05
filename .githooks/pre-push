@@ -1,0 +1,10 @@
+#!/bin/sh
+while read -r _local_ref _local_sha _remote_ref _remote_sha; do
+	case "$_remote_ref" in
+		refs/heads/main | refs/heads/master)
+			echo "pre-push: direct push to ${_remote_ref##refs/heads/} is not allowed." >&2
+			echo "pre-push: create a feature branch and open a PR instead." >&2
+			exit 1
+			;;
+	esac
+done
