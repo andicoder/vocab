@@ -80,8 +80,15 @@ async def _resolve_user(username: str) -> User:
 # module import (pydantic v2 + mcp SDK compat). We import it here, after our
 # own config is loaded, so the warning appears early but is harmless.
 from mcp.server.fastmcp import Context, FastMCP  # noqa: E402, I001
+from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 
 MCPContext = Context[Any, Any, Any]
+
+_transport_security = (
+    TransportSecuritySettings(allowed_hosts=settings.mcp_allowed_hosts)
+    if settings.mcp_allowed_hosts
+    else None
+)
 
 mcp = FastMCP(
     "vocab-api",
@@ -92,6 +99,7 @@ mcp = FastMCP(
     ),
     streamable_http_path="/",
     stateless_http=True,
+    transport_security=_transport_security,
 )
 
 
