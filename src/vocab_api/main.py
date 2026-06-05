@@ -1,6 +1,6 @@
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 import httpx
@@ -84,10 +84,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.mount("/mcp", mcp_app)
 
     try:
-        if settings.gemini_api_key:
-            async with run_worker(session_factory=SessionLocal, deps=deps):
-                yield
-        else:
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(_mcp.session_manager.run())
+            if settings.gemini_api_key:
+                await stack.enter_async_context(run_worker(session_factory=SessionLocal, deps=deps))
             yield
     finally:
         await http_client.aclose()
