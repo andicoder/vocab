@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     # `mcp_username` selects which vocab user the tools act on behalf of.
     mcp_api_key: str = ""
     mcp_username: str = "mcp"
+    mcp_allowed_hosts: list[str] = []
 
 
 settings = Settings()
