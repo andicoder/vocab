@@ -1,11 +1,12 @@
 import logging
 from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Mount
 
 from . import __version__
 from .anki_sync import AnkiSyncWriter, parse_credentials_json
@@ -73,11 +74,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.worker_deps = deps
     configure_mcp(deps)
 
+    # Reset session manager so streamable_http_app() creates a fresh one each
+    # lifespan cycle (the manager's run() is single-use).
+    _mcp._session_manager = None
+    mcp_app = _mcp.streamable_http_app()
+    app.router.routes = [
+        r for r in app.router.routes if not (isinstance(r, Mount) and r.path == "/mcp")
+    ]
+    app.mount("/mcp", mcp_app)
+
     try:
-        async with AsyncExitStack() as stack:
-            await stack.enter_async_context(_mcp.session_manager.run())
-            if settings.gemini_api_key:
-                await stack.enter_async_context(run_worker(session_factory=SessionLocal, deps=deps))
+        if settings.gemini_api_key:
+            async with run_worker(session_factory=SessionLocal, deps=deps):
+                yield
+        else:
             yield
     finally:
         await http_client.aclose()
@@ -85,7 +95,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="vocab-api", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-app.mount("/mcp", _mcp.streamable_http_app())
+# /mcp is mounted dynamically in lifespan() — the MCP session manager is
+# single-use and must be recreated each startup cycle.
 app.include_router(vocab.router)
 app.include_router(translate.router)
 app.include_router(audio.router)
