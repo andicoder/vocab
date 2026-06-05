@@ -91,6 +91,7 @@ mcp = FastMCP(
         "and get on-demand translations — all scoped to your vocab user account."
     ),
     streamable_http_path="/",
+    stateless_http=True,
 )
 
 
