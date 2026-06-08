@@ -6,7 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .gemini import GeminiClient, TranslationResult
 from .models import Entry, User
-from .operations import ApprovalDeps, ApprovePayload, apply_approve, apply_reject, load_owned_entry
+from .anki_writer import AnkiBackend
+from .operations import (
+    ApprovalDeps,
+    ApprovePayload,
+    apply_approve,
+    apply_reject,
+    cloze_pool,
+    load_owned_entry,
+    rotate_cloze,
+)
 from .schemas import EntryCreate
 from .worker import WorkerDeps, process_entry
 
@@ -90,3 +99,30 @@ async def translate_word(
     sentence: str | None = None,
 ) -> TranslationResult:
     return await gemini.translate(word=word, sentence=sentence)
+
+
+async def rotate_cloze_sentences(
+    *,
+    session: AsyncSession,
+    user: User,
+    anki_writer: AnkiBackend,
+) -> int:
+    """Advance cloze_index for every synced entry whose pool has >1 sentence.
+
+    Returns the number of entries rotated."""
+    stmt = (
+        select(Entry)
+        .where(Entry.user_id == user.id, Entry.status == "synced", Entry.anki_card_id.is_not(None))
+    )
+    result = await session.execute(stmt)
+    entries = list(result.scalars().all())
+
+    rotated = 0
+    for entry in entries:
+        if len(cloze_pool(entry)) <= 1:
+            continue
+        await rotate_cloze(entry=entry, anki_writer=anki_writer, user=user)
+        rotated += 1
+
+    await session.commit()
+    return rotated

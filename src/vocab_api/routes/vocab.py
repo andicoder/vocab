@@ -19,7 +19,7 @@ from ..gemini import GeminiClient
 from ..models import Entry, User
 from ..operations import ApprovalDeps, ApprovePayload
 from ..schemas import EntryCreate, EntryRead
-from ..vocab_service import add_entry, approve_entry, list_entries, reject_entry
+from ..vocab_service import add_entry, approve_entry, list_entries, reject_entry, rotate_cloze_sentences
 from ..worker import WorkerDeps
 
 router = APIRouter(prefix="/vocab", tags=["vocab"])
@@ -95,3 +95,13 @@ async def reject_entry_route(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> Entry:
     return await reject_entry(session=session, entry_id=entry_id, user=user)
+
+
+@router.post("/rotate-cloze")
+async def rotate_cloze_route(
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
+) -> dict[str, int]:
+    rotated = await rotate_cloze_sentences(session=session, user=user, anki_writer=anki_writer)
+    return {"rotated": rotated}

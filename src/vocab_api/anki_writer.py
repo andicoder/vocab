@@ -173,6 +173,8 @@ class AnkiBackend(Protocol):
         lang: str = "en",
     ) -> int: ...
 
+    async def update_card(self, *, username: str, card_id: int, cloze_sentence: str) -> None: ...
+
 
 def write_media_file(media_dir: Path, content: VocabCardContent) -> None:
     if content.audio_data is not None and content.audio_filename:
@@ -226,6 +228,19 @@ def add_vocab_note(
     return int(card_ids[0])
 
 
+def update_vocab_note(col: Collection, card_id: int, cloze_sentence: str) -> None:
+    """Update the ClozeSentence field of an existing Anki note.
+
+    Only touches the notes table — card scheduling (due, interval, ease) is
+    stored separately in the cards table and is not affected (#82)."""
+    from anki.notes import NoteId  # noqa: PLC0415 — avoid circular at module level
+
+    card = col.get_card(card_id)
+    note = col.get_note(NoteId(card.nid))
+    note["ClozeSentence"] = cloze_sentence
+    col.update_note(note)
+
+
 class AnkiWriter:
     """File-based backend: writes notes straight into `<root>/<user>/collection.anki2`.
 
@@ -252,6 +267,17 @@ class AnkiWriter:
         # The anki package opens a SQLite Collection synchronously through a
         # Rust backend; running it on the event loop would block other I/O.
         return await asyncio.to_thread(self._write_sync, username, content, direction, lang)
+
+    async def update_card(self, *, username: str, card_id: int, cloze_sentence: str) -> None:
+        await asyncio.to_thread(self._update_sync, username, card_id, cloze_sentence)
+
+    def _update_sync(self, username: str, card_id: int, cloze_sentence: str) -> None:
+        col_path = self.collection_path(username)
+        col = Collection(str(col_path))
+        try:
+            update_vocab_note(col, card_id, cloze_sentence)
+        finally:
+            col.close()
 
     def _write_sync(
         self, username: str, content: VocabCardContent, direction: CardDirection, lang: str
