@@ -13,7 +13,16 @@ async def current_user(
     *,
     session: Annotated[AsyncSession, Depends(get_session)],
     x_authentik_username: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> User:
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ")
+        result = await session.execute(select(User).where(User.api_token == token))
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+        return user
+
     if not x_authentik_username:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

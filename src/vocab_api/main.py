@@ -5,6 +5,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.routing import Mount
 
@@ -94,6 +95,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="vocab-api", version=__version__, lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    # moz-extension:// and chrome-extension:// origins each have a unique UUID
+    # prefix per install, so we can't enumerate them — match the scheme instead.
+    allow_origin_regex=r"^(moz-extension|chrome-extension)://.*",
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 # /mcp is mounted dynamically in lifespan() — the MCP session manager is
 # single-use and must be recreated each startup cycle.

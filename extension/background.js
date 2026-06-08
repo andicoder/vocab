@@ -2,7 +2,8 @@
 const api = typeof browser !== "undefined" ? browser : chrome;
 
 const DEFAULTS = {
-    apiBaseUrl: "https://vocab.example.com"
+    apiBaseUrl: "https://vocab.example.com",
+    apiToken: ""
 };
 
 const MENU_SAVE_ID = "vocab-save-selection";
@@ -94,13 +95,18 @@ function extractSentenceInPage(word) {
     return text.slice(start, end).trim();
 }
 
+function authHeaders(apiToken) {
+    const headers = { "Content-Type": "application/json" };
+    if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
+    return headers;
+}
+
 async function postEntry({ word, sentence, source }) {
-    const { apiBaseUrl } = await getConfig();
+    const { apiBaseUrl, apiToken } = await getConfig();
     const url = `${apiBaseUrl.replace(/\/$/, "")}/vocab`;
     const res = await fetch(url, {
         method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(apiToken),
         body: JSON.stringify({ word, sentence: sentence || null, source: source || null })
     });
     if (!res.ok) {
@@ -110,12 +116,11 @@ async function postEntry({ word, sentence, source }) {
 }
 
 async function postTranslate({ word, sentence }) {
-    const { apiBaseUrl } = await getConfig();
+    const { apiBaseUrl, apiToken } = await getConfig();
     const url = `${apiBaseUrl.replace(/\/$/, "")}/translate`;
     const res = await fetch(url, {
         method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(apiToken),
         body: JSON.stringify({ word, sentence: sentence || null })
     });
     if (!res.ok) {

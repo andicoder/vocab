@@ -37,6 +37,7 @@ class User(Base):
     card_direction: Mapped[str] = mapped_column(
         String, nullable=False, default="de_en", server_default="de_en"
     )
+    api_token: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
