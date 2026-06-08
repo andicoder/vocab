@@ -493,14 +493,19 @@ def test_approve_other_users_entry_404(http_client: TestClient, tmp_path: Path):
 class _FakeAnkiWithUpdate:
     """Fake AnkiBackend that records update_card calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, fail_on_card_id: int | None = None) -> None:
+        self.fail_on_card_id = fail_on_card_id
         self.updates: list[dict] = []
 
     async def write_card(self, *, username: str, **kwargs) -> int:
         return 42
 
     async def update_card(self, *, username: str, card_id: int, cloze_sentence: str) -> None:
-        self.updates.append({"username": username, "card_id": card_id, "cloze_sentence": cloze_sentence})
+        if card_id == self.fail_on_card_id:
+            raise RuntimeError("anki update failed")
+        self.updates.append(
+            {"username": username, "card_id": card_id, "cloze_sentence": cloze_sentence}
+        )
 
 
 def test_rotate_cloze_rotates_synced_entries_and_returns_count(
@@ -513,9 +518,7 @@ def test_rotate_cloze_rotates_synced_entries_and_returns_count(
     async def _seed() -> None:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO vocab.user (username) VALUES ('alice') ON CONFLICT DO NOTHING"
-                )
+                text("INSERT INTO vocab.user (username) VALUES ('alice') ON CONFLICT DO NOTHING")
             )
             await conn.execute(
                 text(
@@ -543,6 +546,15 @@ def test_rotate_cloze_rotates_synced_entries_and_returns_count(
     assert fake_anki.updates[0]["card_id"] == 42
     assert fake_anki.updates[0]["cloze_sentence"] == "A ___ arrived."
 
+    async def _cloze_index() -> int:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("SELECT cloze_index FROM vocab.entry WHERE anki_card_id = 42")
+            )
+            return result.scalar_one()
+
+    assert asyncio.run(_cloze_index()) == 1
+
 
 def test_rotate_cloze_skips_entries_with_single_sentence_pool(
     http_client: TestClient,
@@ -553,9 +565,7 @@ def test_rotate_cloze_skips_entries_with_single_sentence_pool(
     async def _seed() -> None:
         async with engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO vocab.user (username) VALUES ('alice') ON CONFLICT DO NOTHING"
-                )
+                text("INSERT INTO vocab.user (username) VALUES ('alice') ON CONFLICT DO NOTHING")
             )
             await conn.execute(
                 text(
@@ -579,3 +589,124 @@ def test_rotate_cloze_skips_entries_with_single_sentence_pool(
     assert response.status_code == 200, response.text
     assert response.json() == {"rotated": 0}
     assert fake_anki.updates == []
+
+
+def test_rotate_cloze_wraps_to_first_sentence(http_client: TestClient) -> None:
+    fake_anki = _FakeAnkiWithUpdate()
+    app.dependency_overrides[get_anki_writer] = lambda: fake_anki
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("INSERT INTO vocab.user (username) VALUES ('alice') ON CONFLICT DO NOTHING")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.entry"
+                    " (user_id, word, lemma, cloze_sentence, extra_examples,"
+                    "  translation, status, anki_card_id, cloze_index, lang)"
+                    " SELECT id, 'train', 'train',"
+                    "  'The ___ was late.',"
+                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'der Zug', 'synced', 42, 2, 'en'"
+                    " FROM vocab.user WHERE username = 'alice'"
+                )
+            )
+
+    asyncio.run(_seed())
+
+    response = http_client.post(
+        "/vocab/rotate-cloze",
+        headers={"X-authentik-username": "alice"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"rotated": 1}
+    assert fake_anki.updates[0]["cloze_sentence"] == "The ___ was late."
+
+
+def test_rotate_cloze_does_not_rotate_other_users_entries(http_client: TestClient) -> None:
+    fake_anki = _FakeAnkiWithUpdate()
+    app.dependency_overrides[get_anki_writer] = lambda: fake_anki
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(text("INSERT INTO vocab.user (username) VALUES ('alice'), ('bob')"))
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.entry"
+                    " (user_id, word, lemma, cloze_sentence, extra_examples,"
+                    "  translation, status, anki_card_id, lang)"
+                    " SELECT id, username, username,"
+                    "  'The ___ was late.',"
+                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'der Zug', 'synced',"
+                    "  CASE username WHEN 'alice' THEN 42 ELSE 43 END, 'en'"
+                    " FROM vocab.user"
+                )
+            )
+
+    asyncio.run(_seed())
+
+    response = http_client.post(
+        "/vocab/rotate-cloze",
+        headers={"X-authentik-username": "alice"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"rotated": 1}
+    assert [update["card_id"] for update in fake_anki.updates] == [42]
+
+
+def test_rotate_cloze_commits_successful_entries_before_later_failure(
+    http_client: TestClient,
+) -> None:
+    fake_anki = _FakeAnkiWithUpdate(fail_on_card_id=43)
+    app.dependency_overrides[get_anki_writer] = lambda: fake_anki
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("INSERT INTO vocab.user (username) VALUES ('alice') ON CONFLICT DO NOTHING")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.entry"
+                    " (user_id, word, lemma, cloze_sentence, extra_examples,"
+                    "  translation, status, anki_card_id, lang)"
+                    " SELECT id, 'train', 'train',"
+                    "  'The ___ was late.',"
+                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'der Zug', 'synced', 42, 'en'"
+                    " FROM vocab.user WHERE username = 'alice'"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.entry"
+                    " (user_id, word, lemma, cloze_sentence, extra_examples,"
+                    "  translation, status, anki_card_id, lang)"
+                    " SELECT id, 'bus', 'bus',"
+                    "  'The ___ was late.',"
+                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'der Bus', 'synced', 43, 'en'"
+                    " FROM vocab.user WHERE username = 'alice'"
+                )
+            )
+
+    async def _cloze_indexes() -> dict[int, int]:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("SELECT anki_card_id, cloze_index FROM vocab.entry ORDER BY anki_card_id")
+            )
+            return dict(result.all())
+
+    asyncio.run(_seed())
+
+    with pytest.raises(RuntimeError, match="anki update failed"):
+        http_client.post(
+            "/vocab/rotate-cloze",
+            headers={"X-authentik-username": "alice"},
+        )
+
+    assert asyncio.run(_cloze_indexes()) == {42: 1, 43: 0}

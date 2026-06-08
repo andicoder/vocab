@@ -4,9 +4,9 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .anki_writer import AnkiBackend
 from .gemini import GeminiClient, TranslationResult
 from .models import Entry, User
-from .anki_writer import AnkiBackend
 from .operations import (
     ApprovalDeps,
     ApprovePayload,
@@ -110,9 +110,8 @@ async def rotate_cloze_sentences(
     """Advance cloze_index for every synced entry whose pool has >1 sentence.
 
     Returns the number of entries rotated."""
-    stmt = (
-        select(Entry)
-        .where(Entry.user_id == user.id, Entry.status == "synced", Entry.anki_card_id.is_not(None))
+    stmt = select(Entry).where(
+        Entry.user_id == user.id, Entry.status == "synced", Entry.anki_card_id.is_not(None)
     )
     result = await session.execute(stmt)
     entries = list(result.scalars().all())
@@ -122,7 +121,7 @@ async def rotate_cloze_sentences(
         if len(cloze_pool(entry)) <= 1:
             continue
         await rotate_cloze(entry=entry, anki_writer=anki_writer, user=user)
+        await session.commit()
         rotated += 1
 
-    await session.commit()
     return rotated

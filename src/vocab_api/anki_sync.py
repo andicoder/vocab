@@ -8,7 +8,13 @@ from typing import cast
 from anki.collection import Collection
 from anki.sync_pb2 import SyncAuth, SyncCollectionResponse
 
-from .anki_writer import CardDirection, VocabCardContent, add_vocab_note, update_vocab_note, write_media_file
+from .anki_writer import (
+    CardDirection,
+    VocabCardContent,
+    add_vocab_note,
+    update_vocab_note,
+    write_media_file,
+)
 
 # `SyncCollectionResponse.ChangesRequired` enum values that mean the local
 # collection is properly attached to the server: nothing further required,

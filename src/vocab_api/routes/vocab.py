@@ -19,7 +19,13 @@ from ..gemini import GeminiClient
 from ..models import Entry, User
 from ..operations import ApprovalDeps, ApprovePayload
 from ..schemas import EntryCreate, EntryRead
-from ..vocab_service import add_entry, approve_entry, list_entries, reject_entry, rotate_cloze_sentences
+from ..vocab_service import (
+    add_entry,
+    approve_entry,
+    list_entries,
+    reject_entry,
+    rotate_cloze_sentences,
+)
 from ..worker import WorkerDeps
 
 router = APIRouter(prefix="/vocab", tags=["vocab"])
