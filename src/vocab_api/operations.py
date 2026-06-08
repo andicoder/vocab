@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .anki_writer import AnkiBackend, CardDirection, VocabCardContent
 from .audio import AudioRequest, AudioStorage, TtsClient, audio_key, synthesize_with_cache
-from .cloze import populate_cloze
+from .cloze import mask_word_in_sentence, populate_cloze
 from .gemini import (
     GeminiClient,
     TranslationRequest,
@@ -54,10 +54,20 @@ class ApprovalDeps:
 
 
 def cloze_pool(entry: Entry) -> list[str]:
-    """All candidate cloze sentences for an entry: [cloze_sentence, *extra_examples]."""
+    """Candidate cloze sentences: cloze_sentence plus masked extra examples.
+
+    Extra examples are stored as full sentences; each one is masked with the
+    lemma before it enters the pool. Sentences where the lemma isn't found
+    (different inflection) are silently dropped — a smaller pool is better
+    than exposing the answer on the card front."""
     pool = [entry.cloze_sentence or ""]
-    if entry.extra_examples:
-        pool.extend(s for s in entry.extra_examples.split("<br>") if s)
+    if entry.extra_examples and entry.lemma:
+        for s in entry.extra_examples.split("<br>"):
+            if not s:
+                continue
+            masked = mask_word_in_sentence(word=entry.lemma, sentence=s)
+            if masked is not None:
+                pool.append(masked)
     return pool
 
 

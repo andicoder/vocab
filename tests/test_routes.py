@@ -527,7 +527,7 @@ def test_rotate_cloze_rotates_synced_entries_and_returns_count(
                     "  translation, status, anki_card_id, lang)"
                     " SELECT id, 'train', 'train',"
                     "  'The ___ was late.',"
-                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'A train arrived early.<br>The train left.',"
                     "  'der Zug', 'synced', 42, 'en'"
                     " FROM vocab.user WHERE username = 'alice'"
                 )
@@ -544,7 +544,7 @@ def test_rotate_cloze_rotates_synced_entries_and_returns_count(
     assert response.json() == {"rotated": 1}
     assert len(fake_anki.updates) == 1
     assert fake_anki.updates[0]["card_id"] == 42
-    assert fake_anki.updates[0]["cloze_sentence"] == "A ___ arrived."
+    assert fake_anki.updates[0]["cloze_sentence"] == "A ___ arrived early."
 
     async def _cloze_index() -> int:
         async with engine.begin() as conn:
@@ -607,7 +607,7 @@ def test_rotate_cloze_wraps_to_first_sentence(http_client: TestClient) -> None:
                     "  translation, status, anki_card_id, cloze_index, lang)"
                     " SELECT id, 'train', 'train',"
                     "  'The ___ was late.',"
-                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'A train arrived early.<br>The train left.',"
                     "  'der Zug', 'synced', 42, 2, 'en'"
                     " FROM vocab.user WHERE username = 'alice'"
                 )
@@ -637,9 +637,9 @@ def test_rotate_cloze_does_not_rotate_other_users_entries(http_client: TestClien
                     "INSERT INTO vocab.entry"
                     " (user_id, word, lemma, cloze_sentence, extra_examples,"
                     "  translation, status, anki_card_id, lang)"
-                    " SELECT id, username, username,"
+                    " SELECT id, username, 'train',"
                     "  'The ___ was late.',"
-                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'A train arrived early.<br>The train left.',"
                     "  'der Zug', 'synced',"
                     "  CASE username WHEN 'alice' THEN 42 ELSE 43 END, 'en'"
                     " FROM vocab.user"
@@ -676,7 +676,7 @@ def test_rotate_cloze_commits_successful_entries_before_later_failure(
                     "  translation, status, anki_card_id, lang)"
                     " SELECT id, 'train', 'train',"
                     "  'The ___ was late.',"
-                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'A train arrived early.<br>The train left.',"
                     "  'der Zug', 'synced', 42, 'en'"
                     " FROM vocab.user WHERE username = 'alice'"
                 )
@@ -688,7 +688,7 @@ def test_rotate_cloze_commits_successful_entries_before_later_failure(
                     "  translation, status, anki_card_id, lang)"
                     " SELECT id, 'bus', 'bus',"
                     "  'The ___ was late.',"
-                    "  'A ___ arrived.<br>The ___ left.',"
+                    "  'A bus arrived early.<br>The bus left.',"
                     "  'der Bus', 'synced', 43, 'en'"
                     " FROM vocab.user WHERE username = 'alice'"
                 )
