@@ -233,9 +233,10 @@ def update_vocab_note(col: Collection, card_id: int, cloze_sentence: str) -> Non
 
     Only touches the notes table — card scheduling (due, interval, ease) is
     stored separately in the cards table and is not affected (#82)."""
+    from anki.cards import CardId  # noqa: PLC0415 — avoid circular at module level
     from anki.notes import NoteId  # noqa: PLC0415 — avoid circular at module level
 
-    card = col.get_card(card_id)
+    card = col.get_card(CardId(card_id))
     note = col.get_note(NoteId(card.nid))
     note["ClozeSentence"] = cloze_sentence
     col.update_note(note)
