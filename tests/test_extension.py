@@ -15,7 +15,7 @@ def test_manifest_is_valid_mv3():
     assert "contextMenus" in data["permissions"]
     assert "scripting" in data["permissions"]
     assert "storage" in data["permissions"]
-    assert data["host_permissions"] == ["https://vocab.example.com/*"]
+    assert data["host_permissions"] == ["<all_urls>"]
     assert data["background"]["service_worker"] == "background.js"
     assert data["options_ui"]["page"] == "options.html"
 
@@ -49,8 +49,18 @@ def test_background_script_targets_vocab_endpoint():
     js = (_EXT / "background.js").read_text(encoding="utf-8")
     assert "/vocab" in js
     assert "/translate" in js
-    assert 'credentials: "include"' in js
+    assert "Authorization" in js
     assert "contextMenus" in js
+
+
+def test_options_page_has_token_field():
+    html = (_EXT / "options.html").read_text(encoding="utf-8")
+    assert "apiToken" in html or "token" in html.lower()
+
+
+def test_options_js_persists_token():
+    js = (_EXT / "options.js").read_text(encoding="utf-8")
+    assert "apiToken" in js
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

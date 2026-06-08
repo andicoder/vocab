@@ -710,3 +710,39 @@ def test_rotate_cloze_commits_successful_entries_before_later_failure(
         )
 
     assert asyncio.run(_cloze_indexes()) == {42: 1, 43: 0}
+
+
+def test_post_me_token_generates_token(http_client: TestClient) -> None:
+    response = http_client.post("/me/token", headers={"X-authentik-username": "alice"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "token" in body
+    assert len(body["token"]) >= 32
+
+
+def test_bearer_token_authenticates_user(http_client: TestClient) -> None:
+    token_resp = http_client.post("/me/token", headers={"X-authentik-username": "alice"})
+    assert token_resp.status_code == 200
+    token = token_resp.json()["token"]
+
+    response = http_client.get("/me/settings", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"card_direction": "de_en"}
+
+
+def test_bearer_token_invalid_returns_401(http_client: TestClient) -> None:
+    response = http_client.get("/me/settings", headers={"Authorization": "Bearer invalid-token"})
+    assert response.status_code == 401
+
+
+def test_cors_preflight_allows_extension_origin(http_client: TestClient) -> None:
+    response = http_client.options(
+        "/vocab",
+        headers={
+            "Origin": "moz-extension://abc123-def456",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Authorization, Content-Type",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert "access-control-allow-origin" in response.headers

@@ -39,3 +39,7 @@ class SettingsRead(BaseModel):
 
 class SettingsUpdate(BaseModel):
     card_direction: Literal["de_en", "en_de", "both"] | None = None
+
+
+class TokenRead(BaseModel):
+    token: str

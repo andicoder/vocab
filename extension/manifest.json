@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Send selected words to vocab-api with one click.",
   "permissions": ["contextMenus", "storage", "notifications", "scripting", "activeTab"],
-  "host_permissions": ["https://vocab.example.com/*"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
