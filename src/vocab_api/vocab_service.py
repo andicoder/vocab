@@ -110,8 +110,10 @@ async def rotate_cloze_sentences(
     """Advance cloze_index for every synced entry whose pool has >1 sentence.
 
     Returns the number of entries rotated."""
-    stmt = select(Entry).where(
-        Entry.user_id == user.id, Entry.status == "synced", Entry.anki_card_id.is_not(None)
+    stmt = (
+        select(Entry)
+        .where(Entry.user_id == user.id, Entry.status == "synced", Entry.anki_card_id.is_not(None))
+        .order_by(Entry.id)
     )
     result = await session.execute(stmt)
     entries = list(result.scalars().all())
