@@ -49,8 +49,32 @@ def test_background_script_targets_vocab_endpoint():
     js = (_EXT / "background.js").read_text(encoding="utf-8")
     assert "/vocab" in js
     assert "/translate" in js
-    assert 'credentials: "include"' in js
+    assert "Authorization" in js
     assert "contextMenus" in js
+
+
+def test_manifest_has_identity_permission():
+    data = json.loads((_EXT / "manifest.json").read_text(encoding="utf-8"))
+    assert "identity" in data["permissions"]
+
+
+def test_options_page_has_oidc_fields():
+    html = (_EXT / "options.html").read_text(encoding="utf-8")
+    assert "oidcIssuer" in html
+    assert "oidcClientId" in html
+
+
+def test_options_js_implements_pkce_login():
+    js = (_EXT / "options.js").read_text(encoding="utf-8")
+    assert "launchWebAuthFlow" in js
+    assert "code_challenge" in js
+    assert "code_verifier" in js
+
+
+def test_options_js_persists_oidc_settings():
+    js = (_EXT / "options.js").read_text(encoding="utf-8")
+    assert "oidcIssuer" in js
+    assert "oidcClientId" in js
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
