@@ -49,18 +49,8 @@ def test_background_script_targets_vocab_endpoint():
     js = (_EXT / "background.js").read_text(encoding="utf-8")
     assert "/vocab" in js
     assert "/translate" in js
-    assert "Authorization" in js
+    assert 'credentials: "include"' in js
     assert "contextMenus" in js
-
-
-def test_options_page_has_token_field():
-    html = (_EXT / "options.html").read_text(encoding="utf-8")
-    assert "apiToken" in html or "token" in html.lower()
-
-
-def test_options_js_persists_token():
-    js = (_EXT / "options.js").read_text(encoding="utf-8")
-    assert "apiToken" in js
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
