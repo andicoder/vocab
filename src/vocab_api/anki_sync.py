@@ -8,7 +8,7 @@ from typing import cast
 from anki.collection import Collection
 from anki.sync_pb2 import SyncAuth, SyncCollectionResponse
 
-from .anki_writer import CardDirection, VocabCardContent, add_vocab_note, write_media_file
+from .anki_writer import CardDirection, VocabCardContent, add_vocab_note, update_vocab_note, write_media_file
 
 # `SyncCollectionResponse.ChangesRequired` enum values that mean the local
 # collection is properly attached to the server: nothing further required,
@@ -91,6 +91,10 @@ class AnkiSyncWriter:
         async with self._user_lock(username):
             return await asyncio.to_thread(self._write_and_sync, username, content, direction, lang)
 
+    async def update_card(self, *, username: str, card_id: int, cloze_sentence: str) -> None:
+        async with self._user_lock(username):
+            await asyncio.to_thread(self._update_and_sync, username, card_id, cloze_sentence)
+
     def _write_and_sync(
         self,
         username: str,
@@ -121,6 +125,25 @@ class AnkiSyncWriter:
             _resolve_after_write(col, push, auth=auth, username=username)
             _wait_for_media_sync(col, auth=auth, username=username)
             return card_id
+        finally:
+            col.close()
+
+    def _update_and_sync(self, username: str, card_id: int, cloze_sentence: str) -> None:
+        if username not in self._credentials:
+            raise RuntimeError(
+                f"no anki-sync credentials configured for user '{username}' "
+                "(set VOCAB_ANKI_SYNC_CREDENTIALS_JSON)"
+            )
+        col_path = self.shadow_path(username)
+        col_path.parent.mkdir(parents=True, exist_ok=True)
+        col = Collection(str(col_path))
+        try:
+            auth = self._get_or_login(username, col)
+            pull = col.sync_collection(auth, sync_media=False)
+            _reattach_before_write(col, pull, auth=auth)
+            update_vocab_note(col, card_id, cloze_sentence)
+            push = col.sync_collection(auth, sync_media=False)
+            _resolve_after_write(col, push, auth=auth, username=username)
         finally:
             col.close()
 

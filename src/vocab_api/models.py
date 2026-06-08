@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     MetaData,
     String,
     Text,
@@ -99,6 +100,7 @@ class Entry(Base):
         String, nullable=False, default="pending", server_default="pending"
     )
     anki_card_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cloze_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -9,6 +9,7 @@ from vocab_api.anki_writer import (
     AnkiWriter,
     VocabCardContent,
     deck_name_for,
+    update_vocab_note,
 )
 
 
@@ -646,5 +647,52 @@ async def test_existing_notetype_gets_cloze_sentence_field_added(tmp_path: Path)
         qfmt = model["tmpls"][0]["qfmt"]
         assert "legacy" not in qfmt
         assert "{{ClozeSentence}}" in qfmt
+    finally:
+        col.close()
+
+
+async def test_update_vocab_note_changes_cloze_sentence_field(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            word="train",
+            lemma="train",
+            cloze_sentence="The ___ was late.",
+            translation="der Zug",
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        update_vocab_note(col, card_id, "A ___ arrived early.")
+        note = col.get_card(card_id).note()
+        assert note["ClozeSentence"] == "A ___ arrived early."
+    finally:
+        col.close()
+
+
+async def test_update_card_persists_changed_cloze_sentence(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            word="train",
+            lemma="train",
+            cloze_sentence="The ___ was late.",
+            translation="der Zug",
+        ),
+    )
+
+    await writer.update_card(
+        username="alice",
+        card_id=card_id,
+        cloze_sentence="A ___ arrived early.",
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note = col.get_card(card_id).note()
+        assert note["ClozeSentence"] == "A ___ arrived early."
     finally:
         col.close()

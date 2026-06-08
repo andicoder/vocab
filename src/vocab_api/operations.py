@@ -53,6 +53,20 @@ class ApprovalDeps:
     voice: str
 
 
+def cloze_pool(entry: Entry) -> list[str]:
+    """All candidate cloze sentences for an entry: [cloze_sentence, *extra_examples]."""
+    pool = [entry.cloze_sentence or ""]
+    if entry.extra_examples:
+        pool.extend(s for s in entry.extra_examples.split("<br>") if s)
+    return pool
+
+
+def active_cloze_sentence(entry: Entry) -> str:
+    """The sentence currently active based on cloze_index (wraps around the pool)."""
+    pool = cloze_pool(entry)
+    return pool[entry.cloze_index % len(pool)]
+
+
 async def load_owned_entry(session: AsyncSession, entry_id: int, user: User) -> Entry:
     entry = await session.get(Entry, entry_id)
     if entry is None or entry.user_id != user.id:
@@ -85,7 +99,7 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
         word=entry.word,
         lemma=entry.lemma,
         sentence=entry.sentence,
-        cloze_sentence=entry.cloze_sentence or "",
+        cloze_sentence=active_cloze_sentence(entry),
         translation=entry.translation,
         alternatives=entry.alternatives or "",
         ipa=entry.ipa or "",
@@ -200,6 +214,17 @@ def _backfill_translation_fields(entry: Entry, tr: TranslationResult) -> None:
     if not entry.alt_examples:
         entry.alt_examples = join_extra_examples(tr.alt_examples) or None
     entry.alt_priority = tr.alt_priority or None
+
+
+async def rotate_cloze(*, entry: Entry, anki_writer: AnkiBackend, user: User) -> None:
+    """Advance cloze_index by one and push the new sentence to Anki."""
+    assert entry.anki_card_id is not None
+    entry.cloze_index += 1
+    await anki_writer.update_card(
+        username=user.username,
+        card_id=entry.anki_card_id,
+        cloze_sentence=active_cloze_sentence(entry),
+    )
 
 
 def apply_reject(entry: Entry) -> None:
