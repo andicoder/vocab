@@ -57,15 +57,18 @@ def cloze_pool(entry: Entry) -> list[str]:
     """Candidate cloze sentences: cloze_sentence plus masked extra examples.
 
     Extra examples are stored as full sentences; each one is masked with the
-    lemma before it enters the pool. Sentences where the lemma isn't found
-    (different inflection) are silently dropped — a smaller pool is better
-    than exposing the answer on the card front."""
+    lemma before it enters the pool. If the lemma isn't found, the original
+    surface form is tried next. Sentences where neither form is found are
+    silently dropped — a smaller pool is better than exposing the answer on
+    the card front."""
     pool = [entry.cloze_sentence or ""]
     if entry.extra_examples and entry.lemma:
         for s in entry.extra_examples.split("<br>"):
             if not s:
                 continue
             masked = mask_word_in_sentence(word=entry.lemma, sentence=s)
+            if masked is None and entry.word != entry.lemma:
+                masked = mask_word_in_sentence(word=entry.word, sentence=s)
             if masked is not None:
                 pool.append(masked)
     return pool
