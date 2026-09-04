@@ -1,4 +1,3 @@
-import logging
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -16,19 +15,14 @@ from .audio import EdgeTtsClient, make_storage_from_settings
 from .config import settings
 from .db import SessionLocal
 from .gemini import GeminiClient
+from .logging_config import configure_logging
 from .mcp_server import configure_mcp
 from .mcp_server import mcp as _mcp
 from .routes import audio, imports, translate, ui, vocab
 from .routes import settings as settings_routes
 from .worker import WorkerDeps, run_worker
 
-# uvicorn installs its own handlers before our app code runs; force=True so
-# our format and level take precedence for vocab_api.* loggers too.
-logging.basicConfig(
-    level=settings.log_level,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    force=True,
-)
+configure_logging(settings.log_level, settings.log_format)
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 

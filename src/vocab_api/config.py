@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     public_base_url: str = ""
 
     log_level: str = "INFO"
+    # "json" in the cluster so records land structured in OpenObserve;
+    # "text" locally, where a human reads them.
+    log_format: str = "text"
 
     # MCP server. HTTP transport always mounted at /mcp (Streamable HTTP,
     # stateless). When `mcp_api_key` is set, every tool call must supply it as
