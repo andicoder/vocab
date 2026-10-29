@@ -99,6 +99,52 @@ async def test_add_entry_creates_entry_and_returns_translation(db_session, deps_
 
 
 @pytest.mark.asyncio
+async def test_add_entry_returns_existing_entry_when_sense_is_duplicate(db_session, deps_factory):
+    user = User(username="alice")
+    db_session.add(user)
+    await db_session.flush()
+
+    existing = Entry(
+        user_id=user.id,
+        word="expedition",
+        lemma="expedition",
+        lang="en",
+        sense_key="default",
+        status="synced",
+    )
+    db_session.add(existing)
+    await db_session.flush()
+
+    response_json = {
+        "lemma": "expedition",
+        "translation": "die Expedition",
+        "alternatives": "",
+        "ipa": "/ˌɛkspɪˈdɪʃən/",
+        "sense_key": "default",
+        "sense_label": "",
+        "collocations": [],
+        "extra_examples": [],
+        "alt_lemma": "",
+        "alt_reason": "",
+        "alt_translation": "",
+        "alt_ipa": "",
+        "alt_examples": [],
+        "alt_priority": "none",
+    }
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return reply(json.dumps(response_json))
+
+    llm, _ = make_llm(handler)
+    deps = deps_factory(llm=llm)
+
+    payload = EntryCreate(word="expeditions", sentence="Two expeditions set out.")
+    entry = await add_entry(session=db_session, user=user, payload=payload, deps=deps, timeout=5.0)
+
+    assert entry.id == existing.id
+
+
+@pytest.mark.asyncio
 async def test_add_entry_handles_timeout_gracefully(db_session, deps_factory):
     user = User(username="alice")
     db_session.add(user)

@@ -65,12 +65,12 @@ async def process_entry(
     entry: Entry,
     user: User,
     deps: WorkerDeps,
-) -> str | None:
+) -> Entry | None:
     """Translates and (if plausible) writes `entry` to Anki.
 
-    Returns the existing lemma if `entry` was a duplicate of another entry's
-    lemma — in that case the entry is deleted from the session and no further
-    work happens. Caller may use the return value for user feedback."""
+    Returns the existing entry if `entry` was a duplicate of its lemma and
+    sense — in that case the new entry is deleted from the session and no
+    further work happens. Caller may use the return value for user feedback."""
     translation = await translate_with_cache(
         session=session,
         cache_session_factory=deps.cache_session_factory,
@@ -84,14 +84,15 @@ async def process_entry(
     # worker retry (#10). Since #24 the duplicate guard is per-sense — the
     # same lemma can legitimately land twice as long as the sense_key
     # differs (`train` as verb vs. as noun).
-    if await _sense_already_exists(
+    existing = await _find_existing_sense(
         session,
         user_id=user.id,
         lemma=translation.lemma,
         lang=entry.lang,
         sense_key=translation.sense_key,
         exclude_id=entry.id,
-    ):
+    )
+    if existing is not None:
         log.info(
             "dropped duplicate-sense entry id=%s user=%s lemma=%s sense=%s",
             entry.id,
@@ -100,7 +101,7 @@ async def process_entry(
             translation.sense_key,
         )
         await session.delete(entry)
-        return translation.lemma
+        return existing
 
     # Plausibility compares lemma-form against the lemma-form German
     # translation. Passing the inflected encounter (`pebbles` vs `der
@@ -176,7 +177,7 @@ async def process_entry_or_defer(
     user: User,
     deps: WorkerDeps,
     timeout: float,
-) -> str | None:
+) -> Entry | None:
     """Runs `process_entry` inline; on any failure the entry stays pending
     and the background worker retries it with backoff."""
     entry_id, word = entry.id, entry.word
@@ -222,9 +223,15 @@ def _populate_entry_from_translation(
     entry.alt_examples = join_extra_examples(translation.alt_examples) or None
     entry.alt_audio_url = alt_audio_url
     entry.alt_priority = translation.alt_priority or None
+    entry.mc_distractors = join_collocations(translation.mc_distractors) or None
+    entry.synonym = translation.synonym or None
+    entry.antonym = translation.antonym or None
+    entry.production_prompt = translation.production_prompt or None
+    entry.production_solution = translation.production_solution or None
+    entry.definition_en = translation.definition_en or None
 
 
-async def _sense_already_exists(  # noqa: PLR0913 — six narrow scalars are clearer than a one-call-site dataclass
+async def _find_existing_sense(  # noqa: PLR0913 — six narrow scalars are clearer than a one-call-site dataclass
     session: AsyncSession,
     *,
     user_id: int,
@@ -232,9 +239,9 @@ async def _sense_already_exists(  # noqa: PLR0913 — six narrow scalars are cle
     lang: str,
     sense_key: str,
     exclude_id: int,
-) -> bool:
+) -> Entry | None:
     stmt = (
-        select(Entry.id)
+        select(Entry)
         .where(
             Entry.user_id == user_id,
             Entry.lemma == lemma,
@@ -244,7 +251,7 @@ async def _sense_already_exists(  # noqa: PLR0913 — six narrow scalars are cle
         )
         .limit(1)
     )
-    return (await session.execute(stmt)).scalar_one_or_none() is not None
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 async def _claim_one_pending(session: AsyncSession) -> Entry | None:
