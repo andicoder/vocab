@@ -10,6 +10,7 @@ from anki.sync_pb2 import SyncAuth, SyncCollectionResponse
 
 from .anki_writer import (
     CardDirection,
+    NoteFieldUpdate,
     VocabCardContent,
     add_vocab_note,
     update_vocab_note,
@@ -97,9 +98,9 @@ class AnkiSyncWriter:
         async with self._user_lock(username):
             return await asyncio.to_thread(self._write_and_sync, username, content, direction, lang)
 
-    async def update_card(self, *, username: str, card_id: int, cloze_sentence: str) -> None:
+    async def update_card(self, *, username: str, card_id: int, fields: NoteFieldUpdate) -> None:
         async with self._user_lock(username):
-            await asyncio.to_thread(self._update_and_sync, username, card_id, cloze_sentence)
+            await asyncio.to_thread(self._update_and_sync, username, card_id, fields)
 
     def _write_and_sync(
         self,
@@ -134,7 +135,7 @@ class AnkiSyncWriter:
         finally:
             col.close()
 
-    def _update_and_sync(self, username: str, card_id: int, cloze_sentence: str) -> None:
+    def _update_and_sync(self, username: str, card_id: int, fields: NoteFieldUpdate) -> None:
         if username not in self._credentials:
             raise RuntimeError(
                 f"no anki-sync credentials configured for user '{username}' "
@@ -147,7 +148,7 @@ class AnkiSyncWriter:
             auth = self._get_or_login(username, col)
             pull = col.sync_collection(auth, sync_media=False)
             _reattach_before_write(col, pull, auth=auth)
-            update_vocab_note(col, card_id, cloze_sentence)
+            update_vocab_note(col, card_id, fields)
             push = col.sync_collection(auth, sync_media=False)
             _resolve_after_write(col, push, auth=auth, username=username)
         finally:

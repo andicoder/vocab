@@ -7,6 +7,7 @@ from vocab_api.anki_writer import (
     VOCAB_FIELDS,
     VOCAB_NOTETYPE,
     AnkiWriter,
+    NoteFieldUpdate,
     VocabCardContent,
     deck_name_for,
     update_vocab_note,
@@ -440,7 +441,7 @@ async def test_default_direction_creates_only_de_en_template(tmp_path: Path):
         model = col.models.by_name(VOCAB_NOTETYPE)
         assert model is not None
         names = [t["name"] for t in model["tmpls"]]
-        assert names == ["DE→EN"]
+        assert names == ["DE→EN", "Übung"]
         # Sanity: this single template is the production-direction one
         # (cloze gap on the front, word on the back).
         assert "{{ClozeSentence}}" in model["tmpls"][0]["qfmt"]
@@ -457,7 +458,7 @@ async def test_both_direction_creates_two_templates(tmp_path: Path):
         model = col.models.by_name(VOCAB_NOTETYPE)
         assert model is not None
         names = [t["name"] for t in model["tmpls"]]
-        assert names == ["DE→EN", "EN→DE"]
+        assert names == ["DE→EN", "EN→DE", "Übung"]
         # EN→DE template shows the bare lemma on the front.
         en_de = model["tmpls"][1]
         assert en_de["qfmt"].strip() == "<h2>{{Lemma}}</h2>{{#IPA}}<small>{{IPA}}</small>{{/IPA}}"
@@ -475,7 +476,7 @@ async def test_en_de_only_direction_creates_only_recognition_template(tmp_path: 
         model = col.models.by_name(VOCAB_NOTETYPE)
         assert model is not None
         names = [t["name"] for t in model["tmpls"]]
-        assert names == ["EN→DE"]
+        assert names == ["EN→DE", "Übung"]
     finally:
         col.close()
 
@@ -495,7 +496,9 @@ async def test_upgrading_from_de_en_to_both_adds_recognition_template(tmp_path: 
         model = col.models.by_name(VOCAB_NOTETYPE)
         assert model is not None
         names = [t["name"] for t in model["tmpls"]]
-        assert names == ["DE→EN", "EN→DE"]
+        # Migration only ever appends templates, so EN→DE lands after the
+        # Übung template that the first (de_en) write already created.
+        assert names == ["DE→EN", "Übung", "EN→DE"]
     finally:
         col.close()
 
@@ -527,7 +530,7 @@ async def test_legacy_card1_template_is_renamed_to_de_en(tmp_path: Path):
         model = col.models.by_name(VOCAB_NOTETYPE)
         assert model is not None
         names = [t["name"] for t in model["tmpls"]]
-        assert names == ["DE→EN"]
+        assert names == ["DE→EN", "Übung"]
     finally:
         col.close()
 
@@ -665,7 +668,7 @@ async def test_update_vocab_note_changes_cloze_sentence_field(tmp_path: Path):
 
     col = _open_collection(tmp_path, "alice")
     try:
-        update_vocab_note(col, card_id, "A ___ arrived early.")
+        update_vocab_note(col, card_id, NoteFieldUpdate(cloze_sentence="A ___ arrived early."))
         note = col.get_card(card_id).note()
         assert note["ClozeSentence"] == "A ___ arrived early."
     finally:
@@ -687,12 +690,81 @@ async def test_update_card_persists_changed_cloze_sentence(tmp_path: Path):
     await writer.update_card(
         username="alice",
         card_id=card_id,
-        cloze_sentence="A ___ arrived early.",
+        fields=NoteFieldUpdate(cloze_sentence="A ___ arrived early."),
     )
 
     col = _open_collection(tmp_path, "alice")
     try:
         note = col.get_card(card_id).note()
         assert note["ClozeSentence"] == "A ___ arrived early."
+    finally:
+        col.close()
+
+
+async def test_write_card_with_exercise_content_creates_uebung_card(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    await writer.write_card(
+        username="alice",
+        content=_content(
+            exercise_front="<p>Welche Übersetzung passt?</p>",
+            exercise_back="<p><strong>die Expedition</strong></p>",
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note_id = col.find_notes("")[0]
+        note = col.get_note(note_id)
+        assert note["ExerciseFront"] == "<p>Welche Übersetzung passt?</p>"
+        assert note["ExerciseBack"] == "<p><strong>die Expedition</strong></p>"
+        card_ids = col.find_cards(f"nid:{note_id}")
+        assert len(card_ids) == 2, "DE→EN card plus the Übung card"
+        deck_names = {col.decks.name(col.get_card(cid).did) for cid in card_ids}
+        assert deck_name_for(lang="en", template_name="Übung") in deck_names
+    finally:
+        col.close()
+
+
+async def test_write_card_without_exercise_content_creates_no_uebung_card(tmp_path: Path):
+    # Empty ExerciseFront must not spawn a card — Anki skips templates whose
+    # rendered question is empty, so legacy notes stay at one card until the
+    # rotation job fills the field.
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(username="alice", content=_content())
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note_id = col.get_card(card_id).nid
+        assert len(col.find_cards(f"nid:{note_id}")) == 1
+    finally:
+        col.close()
+
+
+async def test_update_card_persists_exercise_fields(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            cloze_sentence="The ___ was late.",
+            exercise_front="<p>alt</p>",
+            exercise_back="<p>alt</p>",
+        ),
+    )
+
+    await writer.update_card(
+        username="alice",
+        card_id=card_id,
+        fields=NoteFieldUpdate(
+            cloze_sentence="The ___ was late.",
+            exercise_front="<p>neu vorn</p>",
+            exercise_back="<p>neu hinten</p>",
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note = col.get_card(card_id).note()
+        assert note["ExerciseFront"] == "<p>neu vorn</p>"
+        assert note["ExerciseBack"] == "<p>neu hinten</p>"
     finally:
         col.close()

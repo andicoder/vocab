@@ -30,6 +30,11 @@ VOCAB_FIELDS = [
     "AltIPA",
     "AltExamples",
     "AltAudio",
+    # Rotating exercise card. Both fields are pre-rendered HTML written by
+    # exercise.py; an empty ExerciseFront suppresses the Übung card entirely
+    # (Anki skips templates whose rendered question is empty).
+    "ExerciseFront",
+    "ExerciseBack",
 ]
 
 CardDirection = Literal["de_en", "en_de", "both"]
@@ -39,6 +44,7 @@ CardDirection = Literal["de_en", "en_de", "both"]
 # collections unreadable.
 _NAME_DE_EN = "DE→EN"
 _NAME_EN_DE = "EN→DE"
+_NAME_EXERCISE = "Übung"
 
 # German display names per source language. New entries land under
 # `{LANGUAGE}::{DIRECTION}` so reviews can be paced per (lang, direction).
@@ -115,15 +121,23 @@ _BACK_EN_DE = (
 )
 
 
+# The exercise card renders pre-built HTML from exercise.py verbatim. An
+# empty ExerciseFront yields an empty question, so Anki generates no card —
+# notes without exercise data cost nothing until rotation fills the field.
+_FRONT_EXERCISE = "{{ExerciseFront}}"
+_BACK_EXERCISE = "{{FrontSide}}<hr>{{ExerciseBack}}"
+
+
 def _wanted_templates(direction: CardDirection) -> list[tuple[str, str, str]]:
     """Return (name, qfmt, afmt) tuples in render order for a given direction."""
     de_en = (_NAME_DE_EN, _FRONT_DE_EN, _BACK_DE_EN)
     en_de = (_NAME_EN_DE, _FRONT_EN_DE, _BACK_EN_DE)
+    exercise = (_NAME_EXERCISE, _FRONT_EXERCISE, _BACK_EXERCISE)
     if direction == "de_en":
-        return [de_en]
+        return [de_en, exercise]
     if direction == "en_de":
-        return [en_de]
-    return [de_en, en_de]
+        return [en_de, exercise]
+    return [de_en, en_de, exercise]
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +167,10 @@ class VocabCardContent:
     alt_examples: str = ""
     alt_audio_data: bytes | None = None
     alt_audio_filename: str | None = None
+    # Pre-rendered HTML for the rotating Übung card; empty means "no
+    # exercise data yet" and suppresses the card.
+    exercise_front: str = ""
+    exercise_back: str = ""
 
 
 class AnkiBackend(Protocol):
@@ -173,7 +191,9 @@ class AnkiBackend(Protocol):
         lang: str = "en",
     ) -> int: ...
 
-    async def update_card(self, *, username: str, card_id: int, cloze_sentence: str) -> None: ...
+    async def update_card(
+        self, *, username: str, card_id: int, fields: "NoteFieldUpdate"
+    ) -> None: ...
 
 
 def write_media_file(media_dir: Path, content: VocabCardContent) -> None:
@@ -222,14 +242,26 @@ def add_vocab_note(
     note["AltIPA"] = content.alt_ipa
     note["AltExamples"] = content.alt_examples
     note["AltAudio"] = f"[sound:{content.alt_audio_filename}]" if content.alt_audio_filename else ""
+    note["ExerciseFront"] = content.exercise_front
+    note["ExerciseBack"] = content.exercise_back
 
     col.add_note(note, deck_id=home_deck_id)
     card_ids = col.find_cards(f"nid:{note.id}")
     return int(card_ids[0])
 
 
-def update_vocab_note(col: Collection, card_id: int, cloze_sentence: str) -> None:
-    """Update the ClozeSentence field of an existing Anki note.
+@dataclass(frozen=True, slots=True)
+class NoteFieldUpdate:
+    """The rotation-writable note fields, bundled so the update path across
+    Protocol and both backends keeps one signature."""
+
+    cloze_sentence: str
+    exercise_front: str = ""
+    exercise_back: str = ""
+
+
+def update_vocab_note(col: Collection, card_id: int, fields: NoteFieldUpdate) -> None:
+    """Update the rotation-owned fields of an existing Anki note.
 
     Only touches the notes table — card scheduling (due, interval, ease) is
     stored separately in the cards table and is not affected (#82)."""
@@ -238,7 +270,9 @@ def update_vocab_note(col: Collection, card_id: int, cloze_sentence: str) -> Non
 
     card = col.get_card(CardId(card_id))
     note = col.get_note(NoteId(card.nid))
-    note["ClozeSentence"] = cloze_sentence
+    note["ClozeSentence"] = fields.cloze_sentence
+    note["ExerciseFront"] = fields.exercise_front
+    note["ExerciseBack"] = fields.exercise_back
     col.update_note(note)
 
 
@@ -269,14 +303,14 @@ class AnkiWriter:
         # Rust backend; running it on the event loop would block other I/O.
         return await asyncio.to_thread(self._write_sync, username, content, direction, lang)
 
-    async def update_card(self, *, username: str, card_id: int, cloze_sentence: str) -> None:
-        await asyncio.to_thread(self._update_sync, username, card_id, cloze_sentence)
+    async def update_card(self, *, username: str, card_id: int, fields: NoteFieldUpdate) -> None:
+        await asyncio.to_thread(self._update_sync, username, card_id, fields)
 
-    def _update_sync(self, username: str, card_id: int, cloze_sentence: str) -> None:
+    def _update_sync(self, username: str, card_id: int, fields: NoteFieldUpdate) -> None:
         col_path = self.collection_path(username)
         col = Collection(str(col_path))
         try:
-            update_vocab_note(col, card_id, cloze_sentence)
+            update_vocab_note(col, card_id, fields)
         finally:
             col.close()
 
