@@ -169,6 +169,31 @@ async def process_entry(
     return None
 
 
+async def process_entry_or_defer(
+    *,
+    session: AsyncSession,
+    entry: Entry,
+    user: User,
+    deps: WorkerDeps,
+    timeout: float,
+) -> str | None:
+    """Runs `process_entry` inline; on any failure the entry stays pending
+    and the background worker retries it with backoff."""
+    entry_id, word = entry.id, entry.word
+    try:
+        # The savepoint undoes a half-processed entry, so the caller can still
+        # commit the raw row. It sits outside the timeout so its rollback
+        # never runs under a cancelled scope.
+        async with session.begin_nested():
+            async with asyncio.timeout(timeout):
+                return await process_entry(session=session, entry=entry, user=user, deps=deps)
+    except Exception:
+        log.warning(
+            "deferred entry id=%s user=%s word=%s to worker", entry_id, user.id, word, exc_info=True
+        )
+        return None
+
+
 def _populate_entry_from_translation(
     entry: Entry,
     translation: TranslationResult,

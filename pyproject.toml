@@ -18,7 +18,9 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "httpx>=0.28",
-    "edge-tts>=7.0",
+    # 7.3 tracks the Edge version Microsoft's endpoint now expects; 7.2.x
+    # gets a 403 on the websocket handshake.
+    "edge-tts>=7.3.1",
     "aioboto3>=13.2",
     "anki>=25.9",
     "jinja2>=3.1",

@@ -2,6 +2,7 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from vocab_api.audio import TtsClient
 from vocab_api.config import settings
 from vocab_api.gemini import GeminiClient, TranslationResult
 from vocab_api.models import Entry, User
@@ -19,7 +20,7 @@ def deps_factory():
     exercised by the test under test — the test will fail if they are).
     """
 
-    def _make(*, gemini: GeminiClient) -> WorkerDeps:
+    def _make(*, gemini: GeminiClient, tts: TtsClient | None = None) -> WorkerDeps:
         engine = create_async_engine(settings.database_url)
         factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -43,7 +44,7 @@ def deps_factory():
 
         return WorkerDeps(
             gemini=gemini,
-            tts=_FakeTts(),
+            tts=tts or _FakeTts(),
             storage=_FakeStorage(),
             anki_writer=_FakeAnki(),
             cache_session_factory=factory,
@@ -53,34 +54,36 @@ def deps_factory():
     return _make
 
 
+_EXPEDITION_JSON = {
+    "lemma": "expedition",
+    "translation": "die Expedition",
+    "alternatives": "die Reise",
+    "ipa": "/ˌɛkspɪˈdɪʃən/",
+    "sense_key": "default",
+    "sense_label": "",
+    "collocations": ["go on an expedition"],
+    "extra_examples": ["The Arctic expedition lasted three months."],
+    "alt_lemma": "",
+    "alt_reason": "",
+    "alt_translation": "",
+    "alt_ipa": "",
+    "alt_examples": [],
+    "alt_priority": "none",
+}
+
+
+def _expedition_handler(request: httpx.Request) -> httpx.Response:
+    candidates = [{"content": {"parts": [{"text": __import__("json").dumps(_EXPEDITION_JSON)}]}}]
+    return httpx.Response(200, json={"candidates": candidates})
+
+
 @pytest.mark.asyncio
 async def test_add_entry_creates_entry_and_returns_translation(db_session, deps_factory):
     user = User(username="alice")
     db_session.add(user)
     await db_session.flush()
 
-    response_json = {
-        "lemma": "expedition",
-        "translation": "die Expedition",
-        "alternatives": "die Reise",
-        "ipa": "/ˌɛkspɪˈdɪʃən/",
-        "sense_key": "default",
-        "sense_label": "",
-        "collocations": ["go on an expedition"],
-        "extra_examples": ["The Arctic expedition lasted three months."],
-        "alt_lemma": "",
-        "alt_reason": "",
-        "alt_translation": "",
-        "alt_ipa": "",
-        "alt_examples": [],
-        "alt_priority": "none",
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        candidates = [{"content": {"parts": [{"text": __import__("json").dumps(response_json)}]}}]
-        return httpx.Response(200, json={"candidates": candidates})
-
-    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http = httpx.AsyncClient(transport=httpx.MockTransport(_expedition_handler))
     gemini = GeminiClient(http=http, api_key="k", model="m", base_url="https://example.com")
     deps = deps_factory(gemini=gemini)
 
@@ -116,6 +119,34 @@ async def test_add_entry_handles_timeout_gracefully(db_session, deps_factory):
     # Entry was saved even though Gemini timed out
     assert entry.id is not None
     assert entry.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_add_entry_keeps_entry_pending_when_audio_synthesis_fails(
+    db_session, deps_factory, caplog
+):
+    # Regression: edge-tts started answering 403 and every add was rolled
+    # back without a trace. The raw entry must survive for the worker.
+    user = User(username="alice")
+    db_session.add(user)
+    await db_session.flush()
+
+    class _BrokenTts:
+        async def synthesize(self, *, text: str, voice: str) -> bytes:
+            raise RuntimeError("403, message='Invalid response status'")
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(_expedition_handler))
+    gemini = GeminiClient(http=http, api_key="k", model="m", base_url="https://example.com")
+    deps = deps_factory(gemini=gemini, tts=_BrokenTts())
+
+    payload = EntryCreate(word="expedition")
+    entry = await add_entry(session=db_session, user=user, payload=payload, deps=deps, timeout=5.0)
+
+    assert entry.id is not None
+    assert entry.status == "pending"
+    assert entry.lemma is None
+    assert "deferred entry" in caplog.text
+    assert "403" in caplog.text
 
 
 @pytest.mark.asyncio
