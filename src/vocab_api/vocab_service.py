@@ -2,6 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .anki_writer import AnkiBackend
+from .exercise import exercise_pool
 from .gemini import GeminiClient, TranslationResult
 from .models import Entry, User
 from .operations import (
@@ -35,11 +36,16 @@ async def add_entry(
     session.add(entry)
     await session.flush()
 
-    await process_entry_or_defer(
+    duplicate_of = await process_entry_or_defer(
         session=session, entry=entry, user=user, deps=deps, timeout=timeout
     )
 
     await session.commit()
+    # Duplicate sense: process_entry deleted the new row, so adding is
+    # idempotent — hand the caller the entry that already exists.
+    if duplicate_of is not None:
+        await session.refresh(duplicate_of)
+        return duplicate_of
     await session.refresh(entry)
     return entry
 
@@ -102,7 +108,7 @@ async def rotate_cloze_sentences(
     user: User,
     anki_writer: AnkiBackend,
 ) -> int:
-    """Advance cloze_index for every synced entry whose pool has >1 sentence.
+    """Advance cloze_index for every synced entry with something to rotate.
 
     Returns the number of entries rotated."""
     stmt = (
@@ -115,7 +121,9 @@ async def rotate_cloze_sentences(
 
     rotated = 0
     for entry in entries:
-        if len(cloze_pool(entry)) <= 1:
+        # An entry rotates when either pool has something to cycle: more
+        # than one gap sentence, or more than one exercise type.
+        if len(cloze_pool(entry)) <= 1 and len(exercise_pool(entry)) <= 1:
             continue
         await rotate_cloze(entry=entry, anki_writer=anki_writer, user=user)
         await session.commit()

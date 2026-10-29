@@ -95,6 +95,16 @@ class Entry(Base):
     alt_examples: Mapped[str | None] = mapped_column(Text, nullable=True)
     alt_audio_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     alt_priority: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Exercise-card payload for the rotating "Übung" template. Distractors
+    # are " · "-joined like collocations; NULL means the worker generation
+    # that wrote this row predates the exercise fields (backfilled on
+    # approve, like the alt_* columns).
+    mc_distractors: Mapped[str | None] = mapped_column(Text, nullable=True)
+    synonym: Mapped[str | None] = mapped_column(Text, nullable=True)
+    antonym: Mapped[str | None] = mapped_column(Text, nullable=True)
+    production_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    production_solution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    definition_en: Mapped[str | None] = mapped_column(Text, nullable=True)
     lang: Mapped[str] = mapped_column(String, nullable=False, default="en", server_default="en")
     status: Mapped[str] = mapped_column(
         String, nullable=False, default="pending", server_default="pending"
@@ -146,6 +156,15 @@ class TranslationCache(Base):
     alt_ipa: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     alt_examples: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     alt_priority: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    # Exercise-card payload. `definition_en == ''` flags a row from before
+    # the exercise fields existed; the cache reader treats it as stale so
+    # the next translate refreshes it in place (same pattern as #43/#60).
+    mc_distractors: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    synonym: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    antonym: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    production_prompt: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    production_solution: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    definition_en: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

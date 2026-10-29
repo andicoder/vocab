@@ -8,9 +8,10 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from .anki_writer import AnkiBackend, CardDirection, VocabCardContent
+from .anki_writer import AnkiBackend, CardDirection, NoteFieldUpdate, VocabCardContent
 from .audio import AudioRequest, AudioStorage, TtsClient, audio_key, synthesize_with_cache
 from .cloze import mask_word_in_sentence, populate_cloze
+from .exercise import active_exercise
 from .gemini import (
     GeminiClient,
     TranslationRequest,
@@ -108,6 +109,8 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
         )
         alt_audio_data = await deps.storage.fetch(alt_audio_filename)
 
+    exercise = active_exercise(entry)
+
     content = VocabCardContent(
         word=entry.word,
         lemma=entry.lemma,
@@ -129,6 +132,8 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
         alt_examples=entry.alt_examples or "",
         alt_audio_data=alt_audio_data,
         alt_audio_filename=alt_audio_filename,
+        exercise_front=exercise.front if exercise else "",
+        exercise_back=exercise.back if exercise else "",
     )
     direction = cast(CardDirection, user.card_direction)
     card_id = await deps.anki_writer.write_card(
@@ -176,16 +181,18 @@ async def _backfill_worker_fields(
     """Re-run translation for legacy entries missing worker-only fields.
 
     Pre-#23 needs-review rows never went through `worker.process_entry`,
-    and pre-#60 rows never had the idiomatic-alternative scoring run on
-    them. The triggering signal is `alt_priority`: post-#60 worker writes
-    always set it (to ``"preferred"``/``"minor"``/``"none"``), so a NULL
-    means the row is legacy and needs backfilling for every worker-only
-    field at once (#58, #60).
+    pre-#60 rows never had the idiomatic-alternative scoring run on them,
+    and pre-exercise rows lack the Übung-card payload. Two generation
+    markers trigger the backfill: NULL `alt_priority` (post-#60 worker
+    writes always set it to ``"preferred"``/``"minor"``/``"none"``) and
+    empty `definition_en` (the post-exercise worker always demands a
+    definition). Either one flags a legacy row that needs backfilling for
+    every worker-only field at once (#58, #60).
 
     The cache hit path is cheap for any word the worker has already seen —
     a miss falls through to one Gemini call. Fresh entries arrive here
-    with `alt_priority` set and short-circuit before the lookup."""
-    if entry.alt_priority is not None:
+    with both markers set and short-circuit before the lookup."""
+    if entry.alt_priority is not None and entry.definition_en:
         return
     tr = await translate_with_cache(
         session=session,
@@ -210,33 +217,44 @@ def _backfill_translation_fields(entry: Entry, tr: TranslationResult) -> None:
     Pure column copy — no I/O. Pulled out so `_backfill_worker_fields` can
     stay below ruff's C901 complexity budget; the audio synthesis (and the
     early-return guard) live in the caller."""
-    if not entry.extra_examples:
-        entry.extra_examples = join_extra_examples(tr.extra_examples) or None
-    if not entry.collocations:
-        entry.collocations = join_collocations(tr.collocations) or None
-    if not entry.sense_label:
-        entry.sense_label = tr.sense_label or None
-    if not entry.alt_lemma:
-        entry.alt_lemma = tr.alt_lemma or None
-    if not entry.alt_reason:
-        entry.alt_reason = tr.alt_reason or None
-    if not entry.alt_translation:
-        entry.alt_translation = tr.alt_translation or None
-    if not entry.alt_ipa:
-        entry.alt_ipa = tr.alt_ipa or None
-    if not entry.alt_examples:
-        entry.alt_examples = join_extra_examples(tr.alt_examples) or None
+    backfills: dict[str, str] = {
+        "extra_examples": join_extra_examples(tr.extra_examples),
+        "collocations": join_collocations(tr.collocations),
+        "sense_label": tr.sense_label,
+        "alt_lemma": tr.alt_lemma,
+        "alt_reason": tr.alt_reason,
+        "alt_translation": tr.alt_translation,
+        "alt_ipa": tr.alt_ipa,
+        "alt_examples": join_extra_examples(tr.alt_examples),
+        "mc_distractors": join_collocations(tr.mc_distractors),
+        "synonym": tr.synonym,
+        "antonym": tr.antonym,
+        "production_prompt": tr.production_prompt,
+        "production_solution": tr.production_solution,
+        "definition_en": tr.definition_en,
+    }
+    for attr, value in backfills.items():
+        if not getattr(entry, attr):
+            setattr(entry, attr, value or None)
     entry.alt_priority = tr.alt_priority or None
 
 
 async def rotate_cloze(*, entry: Entry, anki_writer: AnkiBackend, user: User) -> None:
-    """Advance cloze_index by one and push the new sentence to Anki."""
+    """Advance cloze_index by one and push the rotated fields to Anki.
+
+    One counter drives both rotations: the gap-sentence pool and the
+    exercise-type pool wrap independently via modulo."""
     assert entry.anki_card_id is not None
     entry.cloze_index += 1
+    exercise = active_exercise(entry)
     await anki_writer.update_card(
         username=user.username,
         card_id=entry.anki_card_id,
-        cloze_sentence=active_cloze_sentence(entry),
+        fields=NoteFieldUpdate(
+            cloze_sentence=active_cloze_sentence(entry),
+            exercise_front=exercise.front if exercise else "",
+            exercise_back=exercise.back if exercise else "",
+        ),
     )
 
 

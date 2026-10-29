@@ -98,6 +98,12 @@ def _format_result(entry: KindleEntry, tr: TranslationResult, verdict: Plausibil
             f"  alt_reason:      {tr.alt_reason!r}",
             f"  alt_translation: {tr.alt_translation!r}",
         ]
+    lines += [
+        f"  definition_en:   {tr.definition_en!r}",
+        f"  mc_distractors:  {tr.mc_distractors!r}",
+        f"  synonym/antonym: {tr.synonym!r} / {tr.antonym!r}",
+        f"  production:      {tr.production_prompt!r} → {tr.production_solution!r}",
+    ]
     return "\n".join(lines)
 
 
@@ -109,6 +115,21 @@ def _print_summary(rows: list[tuple[KindleEntry, TranslationResult, Plausibility
     print(f"  plausibility: {dict(verdicts)}")
     needs_review = sum(1 for _, tr, v in rows if v != "YES" or tr.alt_priority == "preferred")
     print(f"  would route to needs-review: {needs_review}/{len(rows)}")
+    # Exercise-field health: empty definitions keep the cache row stale
+    # (permanent re-translate), wrong distractor counts break the MC card,
+    # and a definition containing the lemma gives away its own answer.
+    total = len(rows)
+    empty_definition = [e.word for e, tr, _ in rows if not tr.definition_en]
+    bad_distractors = [e.word for e, tr, _ in rows if len(tr.mc_distractors) != 3]
+    leaky = [
+        e.word for e, tr, _ in rows if tr.lemma and tr.lemma.lower() in tr.definition_en.lower()
+    ]
+    synonyms = sum(1 for _, tr, _ in rows if tr.synonym)
+    productions = sum(1 for _, tr, _ in rows if tr.production_prompt and tr.production_solution)
+    print(f"  empty definition_en: {len(empty_definition)}/{total} {empty_definition or ''}")
+    print(f"  distractor count != 3: {len(bad_distractors)}/{total} {bad_distractors or ''}")
+    print(f"  lemma leaks into definition: {len(leaky)}/{total} {leaky or ''}")
+    print(f"  synonym present: {synonyms}/{total}, production pair: {productions}/{total}")
 
 
 async def _smoke(
@@ -134,16 +155,24 @@ async def _smoke(
     return tr, verdict
 
 
-async def _run(kindle_db: Path, words: tuple[str, ...]) -> int:
-    if not settings.gemini_api_key:
-        print("VOCAB_GEMINI_API_KEY missing (set via .env or env)", file=sys.stderr)
-        return 1
-
+def _select_entries(kindle_db: Path, words: tuple[str, ...], *, sample: int) -> list[KindleEntry]:
     entries = {e.word: e for e in parse_kindle_vocab(kindle_db)}
     selected = [entries[w] for w in words if w in entries]
     missing = [w for w in words if w not in entries]
     if missing:
         print(f"missing from {kindle_db}: {missing}\n", file=sys.stderr)
+    if sample:
+        chosen = {e.word for e in selected}
+        selected += [e for w, e in entries.items() if w not in chosen][:sample]
+    return selected
+
+
+async def _run(kindle_db: Path, words: tuple[str, ...], *, sample: int = 0) -> int:
+    if not settings.gemini_api_key:
+        print("VOCAB_GEMINI_API_KEY missing (set via .env or env)", file=sys.stderr)
+        return 1
+
+    selected = _select_entries(kindle_db, words, sample=sample)
     if not selected:
         print("no overlap between word list and kindle DB", file=sys.stderr)
         return 1
@@ -189,13 +218,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_TARGETS,
         help=f"Comma-separated word list (default: {len(DEFAULT_TARGETS)} curated words)",
     )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=0,
+        help="Additionally include the first N other words from the Kindle DB",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> int:
     logging.basicConfig(level=logging.WARNING)
     args = _parse_args()
-    return asyncio.run(_run(args.kindle_db, args.words))
+    return asyncio.run(_run(args.kindle_db, args.words, sample=args.sample))
 
 
 if __name__ == "__main__":

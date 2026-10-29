@@ -419,7 +419,9 @@ async def test_process_entry_deletes_entry_when_user_has_existing_lemma(
     finally:
         await http.aclose()
 
-    assert result == "dozen"
+    assert result is not None
+    assert result.lemma == "dozen"
+    assert result.id != pending_id
     await db_session.flush()
     assert await db_session.get(Entry, pending_id) is None
     surviving_count = await db_session.scalar(select(func.count()).select_from(Entry))
@@ -848,6 +850,65 @@ async def test_process_entry_leaves_extra_examples_null_when_empty(
     assert entry.extra_examples is None
 
 
+async def test_process_entry_persists_exercise_fields(db_session: AsyncSession, tmp_path: Path):
+    user, entry = await _make_pending_entry(db_session)
+    payload = {
+        **_TRANSLATE_PAYLOAD,
+        "mc_distractors": ["die Ausstellung", "die Auslieferung", "der Ausflug"],
+        "synonym": "journey (weniger organisiert)",
+        "antonym": "homecoming",
+        "production_prompt": "Du erzählst von einer Forschungsreise.",
+        "production_solution": "The expedition reached the Arctic.",
+        "definition_en": "An organized journey undertaken for a specific purpose.",
+    }
+    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.mc_distractors == "die Ausstellung · die Auslieferung · der Ausflug"
+    assert entry.synonym == "journey (weniger organisiert)"
+    assert entry.antonym == "homecoming"
+    assert entry.production_prompt == "Du erzählst von einer Forschungsreise."
+    assert entry.production_solution == "The expedition reached the Arctic."
+    assert entry.definition_en == "An organized journey undertaken for a specific purpose."
+
+
+async def test_process_entry_leaves_exercise_fields_null_when_omitted(
+    db_session: AsyncSession, tmp_path: Path
+):
+    user, entry = await _make_pending_entry(db_session)
+    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    tts = _FakeTts()
+    storage = _FakeStorage()
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+        )
+    finally:
+        await http.aclose()
+
+    assert entry.mc_distractors is None
+    assert entry.synonym is None
+    assert entry.antonym is None
+    assert entry.production_prompt is None
+    assert entry.production_solution is None
+    assert entry.definition_en is None
+
+
 async def test_process_entry_persists_joined_collocations(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
     payload = {
@@ -1013,7 +1074,8 @@ async def test_polyseme_same_lemma_same_sense_is_dropped(db_session: AsyncSessio
     finally:
         await http.aclose()
 
-    assert result == "train"
+    assert result is not None
+    assert result.lemma == "train"
     await db_session.flush()
     assert await db_session.get(Entry, pending_id) is None
     assert tts.calls == []
