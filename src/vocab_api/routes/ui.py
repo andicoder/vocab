@@ -1,11 +1,9 @@
-import asyncio
 import logging
 import re
 import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
-import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -35,7 +33,7 @@ from ..operations import (
     import_kindle_entries,
     load_owned_entry,
 )
-from ..worker import WorkerDeps, process_entry
+from ..worker import WorkerDeps, process_entry_or_defer
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 _BOOKMARKLET_JS_PATH = Path(__file__).resolve().parent.parent / "static" / "bookmarklet.js"
@@ -184,13 +182,9 @@ async def htmx_create_entry(
             cache_session_factory=session_factory,
             voice=settings.audio_voice,
         )
-        try:
-            async with asyncio.timeout(settings.gemini_timeout_s):
-                duplicate_of = await process_entry(
-                    session=session, entry=entry, user=user, deps=deps
-                )
-        except (TimeoutError, httpx.HTTPError):
-            pass
+        duplicate_of = await process_entry_or_defer(
+            session=session, entry=entry, user=user, deps=deps, timeout=settings.gemini_timeout_s
+        )
 
     await session.commit()
 

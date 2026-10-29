@@ -1,6 +1,3 @@
-import asyncio
-
-import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +14,7 @@ from .operations import (
     rotate_cloze,
 )
 from .schemas import EntryCreate
-from .worker import WorkerDeps, process_entry
+from .worker import WorkerDeps, process_entry_or_defer
 
 
 async def add_entry(
@@ -38,11 +35,9 @@ async def add_entry(
     session.add(entry)
     await session.flush()
 
-    try:
-        async with asyncio.timeout(timeout):
-            await process_entry(session=session, entry=entry, user=user, deps=deps)
-    except (TimeoutError, httpx.HTTPError):
-        pass
+    await process_entry_or_defer(
+        session=session, entry=entry, user=user, deps=deps, timeout=timeout
+    )
 
     await session.commit()
     await session.refresh(entry)

@@ -10,7 +10,7 @@ from tests.test_routes import stub_translation_gemini
 from vocab_api.anki_writer import AnkiWriter
 from vocab_api.audio import LocalDirAudioStorage
 from vocab_api.db import engine
-from vocab_api.deps import get_anki_writer, get_gemini, get_storage
+from vocab_api.deps import get_anki_writer, get_gemini, get_storage, get_tts
 from vocab_api.main import app
 
 
@@ -70,8 +70,8 @@ def test_htmx_create_entry_renders_exists_toast_when_lemma_already_present(
     # Regression for #10: when process_entry deletes the new row as a
     # duplicate of an existing lemma, the UI must render the "already exists"
     # toast instead of session.refresh()ing a deleted entry.
+    from vocab_api import worker
     from vocab_api.config import settings
-    from vocab_api.routes import ui
 
     monkeypatch.setattr(settings, "gemini_api_key", "fake-key")
 
@@ -79,7 +79,7 @@ def test_htmx_create_entry_renders_exists_toast_when_lemma_already_present(
         await session.delete(entry)
         return "dozen"
 
-    monkeypatch.setattr(ui, "process_entry", fake_process_entry)
+    monkeypatch.setattr(worker, "process_entry", fake_process_entry)
 
     response = http_client.post(
         "/ui/vocab",
@@ -90,6 +90,36 @@ def test_htmx_create_entry_renders_exists_toast_when_lemma_already_present(
     assert "dozens" in response.text
     assert "dozen" in response.text
     assert "schon" in response.text  # de: "schon als ... in der Sammlung"
+
+
+def test_htmx_create_entry_keeps_entry_pending_when_tts_fails(
+    http_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Same failure as the MCP path: an error outside the timeout/HTTP family
+    # (edge-tts 403) must leave the raw entry for the worker, not lose it.
+    from vocab_api.config import settings
+
+    monkeypatch.setattr(settings, "gemini_api_key", "fake-key")
+
+    class BrokenTts:
+        async def synthesize(self, *, text: str, voice: str) -> bytes:
+            raise RuntimeError("403, message='Invalid response status'")
+
+    storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
+    app.dependency_overrides[get_gemini] = stub_translation_gemini
+    app.dependency_overrides[get_tts] = lambda: BrokenTts()
+    app.dependency_overrides[get_storage] = lambda: storage
+
+    response = http_client.post("/ui/vocab", data={"word": "whistle"}, headers=_alice())
+    assert response.status_code == 200
+    assert "whistle" in response.text
+
+    async def _status() -> str:
+        async with engine.connect() as conn:
+            row = await conn.execute(text("SELECT status FROM vocab.entry WHERE word = 'whistle'"))
+            return row.scalar_one()
+
+    assert asyncio.run(_status()) == "pending"
 
 
 def test_queue_page_lists_needs_review_entries(http_client: TestClient):
