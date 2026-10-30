@@ -1,4 +1,4 @@
-"""Manually-invoked smoke test against real Gemini.
+"""Manually-invoked smoke test against the real LLM gateway.
 
 Per the CLAUDE.md discipline rule "Prompt and worker-routing changes
 require a real import run before merge": picks a curated set of words
@@ -13,9 +13,9 @@ Usage:
     .venv/bin/python scripts/smoke_translate.py path/to/vocab.db --words toward,beneath
 
 Cache rows for the target words are cleared first so prompt edits are
-actually exercised, not the previously cached translation. Needs a
-populated `VOCAB_GEMINI_API_KEY` (e.g. via `.env`) and a reachable
-Postgres for the cache.
+actually exercised, not the previously cached translation. Needs
+`VOCAB_LLM_BASE_URL` and `VOCAB_LLM_API_KEY` (e.g. via `.env`) and a
+reachable Postgres for the cache.
 """
 
 from __future__ import annotations
@@ -24,30 +24,30 @@ import argparse
 import asyncio
 import logging
 import sys
+import time
 from collections import Counter
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-import httpx
+import anthropic
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from vocab_api.config import settings
-from vocab_api.gemini import (
-    GeminiClient,
+from vocab_api.kindle import KindleEntry, parse_kindle_vocab
+from vocab_api.llm import (
+    LlmClient,
     Plausibility,
     TranslationRequest,
     TranslationResult,
     translate_with_cache,
 )
-from vocab_api.kindle import KindleEntry, parse_kindle_vocab
 from vocab_api.models import TranslationCache
 
 log = logging.getLogger(__name__)
 
 # Curated to exercise the documented bug classes. Each comment names the
 # expected behavior so a regression is obvious at a glance. Extend rather
-# than shrink — the cost of one extra Gemini call is negligible, the cost
+# than shrink — the cost of one extra LLM call is negligible, the cost
 # of an undetected regression is real.
 DEFAULT_TARGETS: tuple[str, ...] = (
     "pebbles",  # #62 plural — expect lemma=pebble, plausibility=YES
@@ -63,31 +63,16 @@ DEFAULT_TARGETS: tuple[str, ...] = (
 )
 
 _EXAMPLE_DB = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "kindle_vocab.db"
-_HTTP_TIMEOUT_S = 60.0
+_HTTP_TIMEOUT_S = 120.0
 _MAX_RETRIES = 3
 
 
-async def _retry[T](factory: Callable[[], Awaitable[T]], *, label: str) -> T:
-    last: Exception | None = None
-    for attempt in range(1, _MAX_RETRIES + 1):
-        try:
-            return await factory()
-        except (httpx.HTTPStatusError, httpx.ReadTimeout, httpx.ConnectError) as e:
-            last = e
-            if attempt < _MAX_RETRIES:
-                print(
-                    f"  retry {attempt}/{_MAX_RETRIES} for {label}: {type(e).__name__}",
-                    file=sys.stderr,
-                )
-                await asyncio.sleep(2 * attempt)
-    assert last is not None
-    raise last
-
-
-def _format_result(entry: KindleEntry, tr: TranslationResult, verdict: Plausibility) -> str:
+def _format_result(
+    entry: KindleEntry, tr: TranslationResult, verdict: Plausibility, elapsed_s: float
+) -> str:
     sentence = (entry.sentence or "")[:70]
     lines = [
-        f"--- {entry.word!r}",
+        f"--- {entry.word!r} ({elapsed_s:.1f}s)",
         f"  sentence:        {sentence!r}...",
         f"  lemma:           {tr.lemma!r}",
         f"  translation:     {tr.translation!r}",
@@ -116,7 +101,7 @@ def _print_summary(rows: list[tuple[KindleEntry, TranslationResult, Plausibility
 async def _smoke(
     *,
     factory: async_sessionmaker[AsyncSession],
-    gemini: GeminiClient,
+    llm: LlmClient,
     entry: KindleEntry,
 ) -> tuple[TranslationResult, Plausibility]:
     async def translate() -> TranslationResult:
@@ -124,21 +109,18 @@ async def _smoke(
             return await translate_with_cache(
                 session=session,
                 cache_session_factory=factory,
-                gemini=gemini,
+                llm=llm,
                 request=TranslationRequest(word=entry.word, sentence=entry.sentence, lang="en"),
             )
 
-    tr = await _retry(translate, label=entry.word)
-    verdict = await _retry(
-        lambda: gemini.plausibility(word=tr.lemma, sentence=entry.sentence, translation=tr),
-        label=f"plausibility:{entry.word}",
-    )
+    tr = await translate()
+    verdict = await llm.plausibility(word=tr.lemma, sentence=entry.sentence, translation=tr)
     return tr, verdict
 
 
 async def _run(kindle_db: Path, words: tuple[str, ...]) -> int:
-    if not settings.gemini_api_key:
-        print("VOCAB_GEMINI_API_KEY missing (set via .env or env)", file=sys.stderr)
+    if not (settings.llm_base_url and settings.llm_api_key):
+        print("VOCAB_LLM_BASE_URL or VOCAB_LLM_API_KEY missing (.env or env)", file=sys.stderr)
         return 1
 
     entries = {e.word: e for e in parse_kindle_vocab(kindle_db)}
@@ -161,21 +143,24 @@ async def _run(kindle_db: Path, words: tuple[str, ...]) -> int:
             )
 
         results: list[tuple[KindleEntry, TranslationResult, Plausibility]] = []
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as http:
-            gemini = GeminiClient(
-                http=http,
-                api_key=settings.gemini_api_key,
-                model=settings.gemini_model,
-                base_url=settings.gemini_base_url,
-            )
+        # Unlike the app, the smoke run lets the SDK retry: one flaky
+        # request should not hide a word from the eyeball check.
+        async with anthropic.AsyncAnthropic(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            timeout=_HTTP_TIMEOUT_S,
+            max_retries=_MAX_RETRIES,
+        ) as client:
+            llm = LlmClient(client)
             for entry in selected:
+                start = time.monotonic()
                 try:
-                    tr, verdict = await _smoke(factory=factory, gemini=gemini, entry=entry)
+                    tr, verdict = await _smoke(factory=factory, llm=llm, entry=entry)
                 except Exception as e:  # noqa: BLE001 — operator-facing tool, want all failures visible
                     print(f"--- {entry.word!r}: FAILED ({type(e).__name__}: {e})")
                     continue
                 results.append((entry, tr, verdict))
-                print(_format_result(entry, tr, verdict))
+                print(_format_result(entry, tr, verdict, time.monotonic() - start))
         _print_summary(results)
     finally:
         await engine.dispose()

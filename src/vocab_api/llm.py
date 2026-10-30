@@ -1,16 +1,25 @@
 import hashlib
-import json
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Literal
 
-import httpx
+import anthropic
+from anthropic.types import Message
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement, and_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from .config import Settings
 from .models import TranslationCache
+
+# Task aliases, not model names: the LLM gateway (ansible-home#641) decides
+# which model answers each one, and can switch it at runtime.
+TRANSLATE_ALIAS = "vocab-translate"
+PLAUSIBILITY_ALIAS = "vocab-plausibility"
+EXAMPLE_ALIAS = "vocab-example"
+
+_MAX_TOKENS = 16000
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,22 +214,37 @@ def _sentence_block(sentence: str | None) -> str:
     return f"Sentence: {sentence}" if sentence else "(no sentence context)"
 
 
-class GeminiClient:
-    def __init__(self, *, http: httpx.AsyncClient, api_key: str, model: str, base_url: str) -> None:
-        self._http = http
-        self._api_key = api_key
-        self._model = model
-        self._base_url = base_url.rstrip("/")
+class LlmOutputError(RuntimeError):
+    pass
+
+
+class LlmClient:
+    def __init__(self, client: anthropic.AsyncAnthropic) -> None:
+        self._client = client
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "LlmClient":
+        # No retries here: a failed entry stays pending and the worker's
+        # backoff is the one retry layer.
+        return cls(
+            anthropic.AsyncAnthropic(
+                base_url=settings.llm_base_url or None,
+                api_key=settings.llm_api_key,
+                timeout=settings.llm_timeout_s,
+                max_retries=0,
+            )
+        )
+
+    async def aclose(self) -> None:
+        await self._client.close()
 
     async def translate(self, *, word: str, sentence: str | None) -> TranslationResult:
         prompt = _TRANSLATE_PROMPT.format(word=word, sentence_block=_sentence_block(sentence))
-        text = await self._generate(prompt, response_mime_type="application/json")
-        return TranslationResult.model_validate(json.loads(text))
+        return await self._parse(TRANSLATE_ALIAS, prompt, TranslationResult)
 
     async def invent_example(self, *, lemma: str) -> InventedExample:
         prompt = _INVENT_EXAMPLE_PROMPT.format(lemma=lemma)
-        text = await self._generate(prompt, response_mime_type="application/json")
-        return InventedExample.model_validate(json.loads(text))
+        return await self._parse(EXAMPLE_ALIAS, prompt, InventedExample)
 
     async def plausibility(
         self,
@@ -234,7 +258,12 @@ class GeminiClient:
             translation=translation.translation,
             sentence_block=_sentence_block(sentence),
         )
-        text = await self._generate(prompt)
+        response = await self._client.messages.create(
+            model=PLAUSIBILITY_ALIAS,
+            max_tokens=_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(block.text for block in _checked(response).content if block.type == "text")
         match = _VERDICT_RE.match(text.upper())
         if match is None:
             return "UNCLEAR"
@@ -242,18 +271,23 @@ class GeminiClient:
         assert verdict in ("YES", "NO", "UNCLEAR")
         return verdict  # type: ignore[return-value]
 
-    async def _generate(self, prompt: str, *, response_mime_type: str | None = None) -> str:
-        url = f"{self._base_url}/models/{self._model}:generateContent"
-        body: dict[str, Any] = {"contents": [{"parts": [{"text": prompt}]}]}
-        if response_mime_type:
-            body["generationConfig"] = {"responseMimeType": response_mime_type}
-        # Key goes in a header, not the query string — httpx renders the
-        # full URL inside HTTPStatusError, so a leaked stack trace would
-        # otherwise dump the key into pod logs (#15).
-        response = await self._http.post(url, headers={"x-goog-api-key": self._api_key}, json=body)
-        response.raise_for_status()
-        data = response.json()
-        return cast(str, data["candidates"][0]["content"]["parts"][0]["text"])
+    async def _parse[T: BaseModel](self, alias: str, prompt: str, output: type[T]) -> T:
+        response = await self._client.messages.parse(
+            model=alias,
+            max_tokens=_MAX_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+            output_format=output,
+        )
+        parsed = _checked(response).parsed_output
+        if parsed is None:
+            raise LlmOutputError(f"alias={alias} returned no structured output")
+        return parsed
+
+
+def _checked[M: Message](response: M) -> M:
+    if response.stop_reason in ("refusal", "max_tokens"):
+        raise LlmOutputError(f"model={response.model} stop_reason={response.stop_reason}")
+    return response
 
 
 def _sentence_hash(sentence: str | None) -> str | None:
@@ -284,7 +318,7 @@ def _cache_row_is_fresh() -> ColumnElement[bool]:
 
 
 # AE/BE orthographic suffix pairs that pair up to the *same* word. The
-# prompt is asked to filter these too (#63), but Gemini still slips them
+# prompt is asked to filter these too (#63), but the model still slips them
 # through occasionally — this deterministic backstop catches the common
 # patterns so the learner never sees `toward → towards` as a "more
 # idiomatic alternative". Single-letter variants (`gray`/`grey`,
@@ -322,8 +356,9 @@ def _strip_low_value_alt(result: TranslationResult) -> TranslationResult:
     """Drop the idiomatic-alt payload when the (lemma, alt_lemma) pair
     matches a known false-positive pattern (#63).
 
-    Two deterministic patterns are caught here as a backstop against the
-    prompt: AE/BE orthographic variants and hyphen-compound expansions.
+    Deterministic patterns are caught here as a backstop against the
+    prompt: AE/BE orthographic variants, hyphen-compound expansions, and an
+    alt the model filled in while rating it "none" itself.
     Meaning-narrowing alternatives (`oblige → help`) are not detectable
     deterministically and rely on the prompt's "do not flag" rules.
 
@@ -333,7 +368,8 @@ def _strip_low_value_alt(result: TranslationResult) -> TranslationResult:
     if not result.alt_lemma:
         return result
     if not (
-        _is_ae_be_variant(result.lemma, result.alt_lemma)
+        result.alt_priority == "none"
+        or _is_ae_be_variant(result.lemma, result.alt_lemma)
         or _is_compound_expansion(result.lemma, result.alt_lemma)
     ):
         return result
@@ -353,7 +389,7 @@ async def translate_with_cache(
     *,
     session: AsyncSession,
     cache_session_factory: async_sessionmaker[AsyncSession],
-    gemini: GeminiClient,
+    llm: LlmClient,
     request: TranslationRequest,
 ) -> TranslationResult:
     sh = _sentence_hash(request.sentence)
@@ -389,9 +425,7 @@ async def translate_with_cache(
             )
         )
 
-    result = _strip_low_value_alt(
-        await gemini.translate(word=request.word, sentence=request.sentence)
-    )
+    result = _strip_low_value_alt(await llm.translate(word=request.word, sentence=request.sentence))
     values = {
         "word": request.word,
         "sentence_hash": sh,

@@ -17,13 +17,13 @@ from ..config import settings
 from ..db import get_session
 from ..deps import (
     get_anki_writer,
-    get_gemini,
+    get_llm,
     get_session_factory,
     get_storage,
     get_tts,
 )
-from ..gemini import GeminiClient
 from ..i18n import current_locale, translator_for
+from ..llm import LlmClient
 from ..models import Entry, User
 from ..operations import (
     ApprovalDeps,
@@ -154,7 +154,7 @@ async def htmx_create_entry(
     request: Request,
     user: Annotated[User, Depends(current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-    gemini: Annotated[GeminiClient, Depends(get_gemini)],
+    llm: Annotated[LlmClient, Depends(get_llm)],
     tts: Annotated[TtsClient, Depends(get_tts)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
     anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
@@ -173,9 +173,9 @@ async def htmx_create_entry(
     await session.flush()
 
     duplicate_of: str | None = None
-    if settings.gemini_api_key:
+    if settings.llm_api_key:
         deps = WorkerDeps(
-            gemini=gemini,
+            llm=llm,
             tts=tts,
             storage=storage,
             anki_writer=anki_writer,
@@ -183,7 +183,7 @@ async def htmx_create_entry(
             voice=settings.audio_voice,
         )
         duplicate_of = await process_entry_or_defer(
-            session=session, entry=entry, user=user, deps=deps, timeout=settings.gemini_timeout_s
+            session=session, entry=entry, user=user, deps=deps, timeout=settings.llm_timeout_s
         )
 
     await session.commit()
@@ -207,7 +207,7 @@ async def htmx_approve(
     session: Annotated[AsyncSession, Depends(get_session)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
     anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
-    gemini: Annotated[GeminiClient, Depends(get_gemini)],
+    llm: Annotated[LlmClient, Depends(get_llm)],
     tts: Annotated[TtsClient, Depends(get_tts)],
     session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
     lemma: Annotated[str | None, Form()] = None,
@@ -231,7 +231,7 @@ async def htmx_approve(
             deps=ApprovalDeps(
                 storage=storage,
                 anki_writer=anki_writer,
-                gemini=gemini,
+                llm=llm,
                 tts=tts,
                 cache_session_factory=session_factory,
                 voice=settings.audio_voice,

@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .anki_writer import AnkiBackend
 from .audio import AudioStorage, TtsClient
-from .gemini import GeminiClient
+from .llm import LlmClient
 from .worker import WorkerDeps
 
 
@@ -14,8 +14,8 @@ def get_worker_deps(request: Request) -> WorkerDeps:
 # The getters below project a single field out of WorkerDeps so route
 # handlers can keep narrow signatures and tests can override individual
 # collaborators via FastAPI's dependency_overrides.
-def get_gemini(request: Request) -> GeminiClient:
-    return get_worker_deps(request).gemini
+def get_llm(request: Request) -> LlmClient:
+    return get_worker_deps(request).llm
 
 
 def get_tts(request: Request) -> TtsClient:

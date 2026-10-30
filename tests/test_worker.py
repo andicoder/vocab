@@ -4,22 +4,19 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
-import httpx
+import anthropic
+import httpx2
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.llm_fake import alias_of, make_llm, prompt_of, reply
 from vocab_api.anki_writer import AnkiWriter
 from vocab_api.audio import AudioRequest, audio_key
 from vocab_api.db import SessionLocal
-from vocab_api.gemini import GeminiClient
+from vocab_api.llm import LlmClient
 from vocab_api.models import AudioCache, Entry, TranslationCache, User
 from vocab_api.worker import WorkerDeps, process_entry
-
-
-def _gemini_response(text: str) -> dict:
-    return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]}
-
 
 _DEFAULT_INVENTED = {
     "sentence": "An invented example sentence.",
@@ -27,43 +24,39 @@ _DEFAULT_INVENTED = {
 }
 
 
-def _classify(body: dict) -> str:
-    """Decide which Gemini operation a mock request represents.
+_KIND_BY_ALIAS = {
+    "vocab-translate": "translate",
+    "vocab-plausibility": "plausibility",
+    "vocab-example": "invent",
+}
 
-    Both translate and invent_example request JSON; only the prompt text
-    can distinguish them. Keep the heuristic narrow so prompt edits don't
-    silently re-route tests."""
-    is_json = body.get("generationConfig", {}).get("responseMimeType") == "application/json"
-    if not is_json:
-        return "plausibility"
-    prompt = body["contents"][0]["parts"][0]["text"]
-    return "invent" if "Invent" in prompt else "translate"
+
+def _classify(request: httpx2.Request) -> str:
+    return _KIND_BY_ALIAS[alias_of(request)]
 
 
 def _make_handler(translate_payload: dict, verdict: str, invented: dict | None = None):
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        kind = _classify(body)
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        kind = _classify(request)
         if kind == "translate":
             text = json.dumps(translate_payload)
         elif kind == "invent":
             text = json.dumps(invented or _DEFAULT_INVENTED)
         else:
             text = verdict
-        return httpx.Response(200, json=_gemini_response(text))
+        return reply(text)
 
     return handler
 
 
 def _make_translate_only_handler(translate_payload: dict):
     # Asserts plausibility and invent are never called — used to prove the
-    # duplicate path short-circuits before any further Gemini request.
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        kind = _classify(body)
+    # duplicate path short-circuits before any further LLM request.
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        kind = _classify(request)
         if kind != "translate":
             raise AssertionError(f"only translate may run for duplicates; got {kind}")
-        return httpx.Response(200, json=_gemini_response(json.dumps(translate_payload)))
+        return reply(json.dumps(translate_payload))
 
     return handler
 
@@ -72,9 +65,8 @@ def _counting_handler(translate_payload: dict, verdict: str, invented: dict | No
     """Same as _make_handler but exposes a per-kind call counter."""
     counts: dict[str, int] = {"translate": 0, "plausibility": 0, "invent": 0}
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        kind = _classify(body)
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        kind = _classify(request)
         counts[kind] += 1
         if kind == "translate":
             text = json.dumps(translate_payload)
@@ -82,23 +74,13 @@ def _counting_handler(translate_payload: dict, verdict: str, invented: dict | No
             text = json.dumps(invented or _DEFAULT_INVENTED)
         else:
             text = verdict
-        return httpx.Response(200, json=_gemini_response(text))
+        return reply(text)
 
     return handler, counts
 
 
-def _gemini_client(handler) -> tuple[GeminiClient, httpx.AsyncClient]:
-    transport = httpx.MockTransport(handler)
-    http = httpx.AsyncClient(transport=transport)
-    return (
-        GeminiClient(
-            http=http,
-            api_key="k",
-            model="m",
-            base_url="https://example.com/v1beta",
-        ),
-        http,
-    )
+def _llm_client(handler) -> tuple[LlmClient, httpx2.AsyncClient]:
+    return make_llm(handler)
 
 
 class _FakeTts:
@@ -151,13 +133,13 @@ _TRANSLATE_PAYLOAD = {
 def _deps(
     *,
     tmp_path: Path,
-    gemini: GeminiClient,
+    llm: LlmClient,
     tts: _FakeTts,
     storage: _FakeStorage,
     anki_writer: AnkiWriter | None = None,
 ) -> WorkerDeps:
     return WorkerDeps(
-        gemini=gemini,
+        llm=llm,
         tts=tts,
         storage=storage,
         anki_writer=anki_writer or AnkiWriter(root=tmp_path),
@@ -169,7 +151,7 @@ async def test_process_entry_yes_writes_anki_and_marks_synced(
     db_session: AsyncSession, tmp_path: Path
 ):
     user, entry = await _make_pending_entry(db_session)
-    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    llm, http = _llm_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -178,7 +160,7 @@ async def test_process_entry_yes_writes_anki_and_marks_synced(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -201,7 +183,7 @@ async def test_process_entry_yes_writes_anki_and_marks_synced(
 
 async def test_process_entry_unclear_needs_review(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session, word="bank")
-    gemini, http = _gemini_client(
+    llm, http = _llm_client(
         _make_handler(
             {
                 "lemma": "bank",
@@ -220,7 +202,7 @@ async def test_process_entry_unclear_needs_review(db_session: AsyncSession, tmp_
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -234,7 +216,7 @@ async def test_process_entry_unclear_needs_review(db_session: AsyncSession, tmp_
 
 async def test_process_entry_no_needs_review(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
-    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "NO"))
+    llm, http = _llm_client(_make_handler(_TRANSLATE_PAYLOAD, "NO"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -243,7 +225,7 @@ async def test_process_entry_no_needs_review(db_session: AsyncSession, tmp_path:
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -255,7 +237,7 @@ async def test_process_entry_no_needs_review(db_session: AsyncSession, tmp_path:
 async def test_process_entry_uses_lemma_for_audio(db_session: AsyncSession, tmp_path: Path):
     # Audio is keyed by lemma so 'expeditions' and 'expedition' share one MP3.
     user, entry = await _make_pending_entry(db_session, word="expeditions")
-    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    llm, http = _llm_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -264,7 +246,7 @@ async def test_process_entry_uses_lemma_for_audio(db_session: AsyncSession, tmp_
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -290,10 +272,9 @@ async def test_plausibility_compares_lemma_against_translation(
 
     plausibility_prompts: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        kind = _classify(body)
-        prompt = body["contents"][0]["parts"][0]["text"]
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        kind = _classify(request)
+        prompt = prompt_of(request)
         if kind == "translate":
             text = json.dumps(
                 {
@@ -311,15 +292,15 @@ async def test_plausibility_compares_lemma_against_translation(
         else:
             plausibility_prompts.append(prompt)
             text = "YES"
-        return httpx.Response(200, json=_gemini_response(text))
+        return reply(text)
 
-    gemini, http = _gemini_client(handler)
+    llm, http = _llm_client(handler)
     try:
         await process_entry(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=_FakeTts(), storage=_FakeStorage()),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=_FakeTts(), storage=_FakeStorage()),
         )
     finally:
         await http.aclose()
@@ -338,20 +319,20 @@ async def test_plausibility_compares_lemma_against_translation(
 async def test_process_entry_propagates_translation_error(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, text="boom")
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(500, text="boom")
 
-    gemini, http = _gemini_client(handler)
+    llm, http = _llm_client(handler)
     tts = _FakeTts()
     storage = _FakeStorage()
 
     try:
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(anthropic.InternalServerError):
             await process_entry(
                 session=db_session,
                 entry=entry,
                 user=user,
-                deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+                deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
             )
     finally:
         await http.aclose()
@@ -405,7 +386,7 @@ async def test_process_entry_deletes_entry_when_user_has_existing_lemma(
         "alternatives": "",
         "ipa": "/ˈdʌzən/",
     }
-    gemini, http = _gemini_client(_make_translate_only_handler(translate_payload))
+    llm, http = _llm_client(_make_translate_only_handler(translate_payload))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -414,7 +395,7 @@ async def test_process_entry_deletes_entry_when_user_has_existing_lemma(
             session=db_session,
             entry=pending,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -456,7 +437,7 @@ async def test_process_entry_allows_same_lemma_for_different_users(
     db_session.add(bob_entry)
     await db_session.flush()
 
-    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    llm, http = _llm_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -465,7 +446,7 @@ async def test_process_entry_allows_same_lemma_for_different_users(
             session=db_session,
             entry=bob_entry,
             user=bob,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -502,7 +483,7 @@ async def test_process_entry_logs_synced_outcome(
     worker_log_records: list[logging.LogRecord],
 ):
     user, entry = await _make_pending_entry(db_session)
-    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    llm, http = _llm_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -511,7 +492,7 @@ async def test_process_entry_logs_synced_outcome(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -561,7 +542,7 @@ async def test_process_entry_logs_duplicate_drop(
         "alternatives": "",
         "ipa": "/ˈdʌzən/",
     }
-    gemini, http = _gemini_client(_make_translate_only_handler(payload))
+    llm, http = _llm_client(_make_translate_only_handler(payload))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -570,7 +551,7 @@ async def test_process_entry_logs_duplicate_drop(
             session=db_session,
             entry=pending,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -597,7 +578,7 @@ async def test_process_entry_logs_needs_review_outcome(
         "alternatives": "",
         "ipa": "/bæŋk/",
     }
-    gemini, http = _gemini_client(_make_handler(payload, "UNCLEAR"))
+    llm, http = _llm_client(_make_handler(payload, "UNCLEAR"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -606,7 +587,7 @@ async def test_process_entry_logs_needs_review_outcome(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -679,7 +660,7 @@ async def test_worker_loop_backs_off_exponentially_on_consecutive_failures(
         await worker_mod._worker_loop(
             session_factory=SessionLocal,
             deps=WorkerDeps(  # type: ignore[arg-type]
-                gemini=None,  # unused: failing_process_one ignores deps
+                llm=None,  # unused: failing_process_one ignores deps
                 tts=None,
                 storage=None,
                 anki_writer=None,
@@ -706,7 +687,7 @@ async def test_cloze_sentence_derived_from_source_sentence_skips_invent_call(
         db_session, word="expedition", sentence="A grand expedition north."
     )
     handler, counts = _counting_handler(_TRANSLATE_PAYLOAD, "YES")
-    gemini, http = _gemini_client(handler)
+    llm, http = _llm_client(handler)
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -715,13 +696,13 @@ async def test_cloze_sentence_derived_from_source_sentence_skips_invent_call(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
 
     assert entry.cloze_sentence == "A grand ___ north."
-    # Deterministic regex path — Gemini's invent_example must not be called.
+    # Deterministic regex path — the LLM's invent_example must not be called.
     assert counts["invent"] == 0
     # Source sentence stays untouched on the entry.
     assert entry.sentence == "A grand expedition north."
@@ -736,7 +717,7 @@ async def test_cloze_sentence_invented_when_entry_has_no_sentence(
         "cloze_sentence": "We launched an ___ north.",
     }
     handler, counts = _counting_handler(_TRANSLATE_PAYLOAD, "YES", invented=invented)
-    gemini, http = _gemini_client(handler)
+    llm, http = _llm_client(handler)
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -745,7 +726,7 @@ async def test_cloze_sentence_invented_when_entry_has_no_sentence(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -775,7 +756,7 @@ async def test_cloze_sentence_invented_when_word_not_in_source_sentence(
         "ipa": "/ˈdʌzən/",
     }
     handler, counts = _counting_handler(payload, "YES", invented=invented)
-    gemini, http = _gemini_client(handler)
+    llm, http = _llm_client(handler)
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -784,7 +765,7 @@ async def test_cloze_sentence_invented_when_word_not_in_source_sentence(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -807,7 +788,7 @@ async def test_process_entry_persists_joined_extra_examples(
             "She joined an expedition to the Amazon.",
         ],
     }
-    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    llm, http = _llm_client(_make_handler(payload, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -816,7 +797,7 @@ async def test_process_entry_persists_joined_extra_examples(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -831,7 +812,7 @@ async def test_process_entry_leaves_extra_examples_null_when_empty(
 ):
     user, entry = await _make_pending_entry(db_session)
     payload = {**_TRANSLATE_PAYLOAD, "extra_examples": []}
-    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    llm, http = _llm_client(_make_handler(payload, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -840,7 +821,7 @@ async def test_process_entry_leaves_extra_examples_null_when_empty(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -854,7 +835,7 @@ async def test_process_entry_persists_joined_collocations(db_session: AsyncSessi
         **_TRANSLATE_PAYLOAD,
         "collocations": ["go on an expedition", "Arctic expedition", "lead an expedition"],
     }
-    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    llm, http = _llm_client(_make_handler(payload, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -863,7 +844,7 @@ async def test_process_entry_persists_joined_collocations(db_session: AsyncSessi
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -871,7 +852,7 @@ async def test_process_entry_persists_joined_collocations(db_session: AsyncSessi
     assert entry.collocations == ("go on an expedition · Arctic expedition · lead an expedition")
 
 
-async def test_process_entry_leaves_collocations_null_when_gemini_returns_empty(
+async def test_process_entry_leaves_collocations_null_when_llm_returns_empty(
     db_session: AsyncSession, tmp_path: Path
 ):
     # Function words / adverbs typically have no idiomatic collocations.
@@ -886,7 +867,7 @@ async def test_process_entry_leaves_collocations_null_when_gemini_returns_empty(
         "ipa": "",
         "collocations": [],
     }
-    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    llm, http = _llm_client(_make_handler(payload, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -895,7 +876,7 @@ async def test_process_entry_leaves_collocations_null_when_gemini_returns_empty(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -941,7 +922,7 @@ async def test_polyseme_same_lemma_different_sense_is_kept_as_separate_card(
         "sense_key": "verb-exercise",
         "sense_label": "sportlich",
     }
-    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    llm, http = _llm_client(_make_handler(payload, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -950,7 +931,7 @@ async def test_polyseme_same_lemma_different_sense_is_kept_as_separate_card(
             session=db_session,
             entry=pending,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -999,7 +980,7 @@ async def test_polyseme_same_lemma_same_sense_is_dropped(db_session: AsyncSessio
         "sense_key": "verb-exercise",
         "sense_label": "sportlich",
     }
-    gemini, http = _gemini_client(_make_translate_only_handler(payload))
+    llm, http = _llm_client(_make_translate_only_handler(payload))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -1008,7 +989,7 @@ async def test_polyseme_same_lemma_same_sense_is_dropped(db_session: AsyncSessio
             session=db_session,
             entry=pending,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -1021,7 +1002,7 @@ async def test_polyseme_same_lemma_same_sense_is_dropped(db_session: AsyncSessio
 
 async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
-    gemini, http = _gemini_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+    llm, http = _llm_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
     raising_anki = _RaisingAnkiWriter()
@@ -1034,7 +1015,7 @@ async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_p
                 user=user,
                 deps=_deps(
                     tmp_path=tmp_path,
-                    gemini=gemini,
+                    llm=llm,
                     tts=tts,
                     storage=storage,
                     anki_writer=raising_anki,  # type: ignore[arg-type]
@@ -1094,7 +1075,7 @@ async def test_process_entry_preferred_alt_routes_to_needs_review(
     # card is written. The alt_* fields are persisted so the review UI can
     # show them.
     user, entry = await _make_pending_entry(db_session, word="weary")
-    gemini, http = _gemini_client(_make_handler(_ALT_PAYLOAD_PREFERRED, "YES"))
+    llm, http = _llm_client(_make_handler(_ALT_PAYLOAD_PREFERRED, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -1103,7 +1084,7 @@ async def test_process_entry_preferred_alt_routes_to_needs_review(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -1134,7 +1115,7 @@ async def test_process_entry_minor_alt_still_auto_approves(
     # A "minor" stylistic alternative is shown on the card but does not stop
     # auto-approval. Card lands in Anki; alt fields are persisted.
     user, entry = await _make_pending_entry(db_session, word="contemporary")
-    gemini, http = _gemini_client(_make_handler(_ALT_PAYLOAD_MINOR, "YES"))
+    llm, http = _llm_client(_make_handler(_ALT_PAYLOAD_MINOR, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -1143,7 +1124,7 @@ async def test_process_entry_minor_alt_still_auto_approves(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()
@@ -1158,12 +1139,12 @@ async def test_process_entry_minor_alt_still_auto_approves(
 async def test_process_entry_no_alt_leaves_alt_fields_null(
     db_session: AsyncSession, tmp_path: Path
 ):
-    # Common case: Gemini reports `alt_priority="none"` (or omits alt fields).
+    # Common case: the model reports `alt_priority="none"` (or omits alt fields).
     # The entry's alt_* columns stay NULL so the card template renders
     # unchanged.
     payload = {**_TRANSLATE_PAYLOAD, "alt_priority": "none"}
     user, entry = await _make_pending_entry(db_session)
-    gemini, http = _gemini_client(_make_handler(payload, "YES"))
+    llm, http = _llm_client(_make_handler(payload, "YES"))
     tts = _FakeTts()
     storage = _FakeStorage()
 
@@ -1172,7 +1153,7 @@ async def test_process_entry_no_alt_leaves_alt_fields_null(
             session=db_session,
             entry=entry,
             user=user,
-            deps=_deps(tmp_path=tmp_path, gemini=gemini, tts=tts, storage=storage),
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=tts, storage=storage),
         )
     finally:
         await http.aclose()

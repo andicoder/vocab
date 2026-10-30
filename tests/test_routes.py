@@ -3,37 +3,19 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 from anki.collection import Collection
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from tests.llm_fake import make_llm, reply
 from vocab_api.anki_writer import AnkiWriter
 from vocab_api.audio import AudioRequest, LocalDirAudioStorage, audio_key
 from vocab_api.db import engine
-from vocab_api.deps import get_anki_writer, get_gemini, get_storage, get_tts
-from vocab_api.gemini import GeminiClient
+from vocab_api.deps import get_anki_writer, get_llm, get_storage, get_tts
+from vocab_api.llm import LlmClient
 from vocab_api.main import app
-
-
-def _gemini_response(text: str) -> dict:
-    return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]}
-
-
-def _gemini_with_handler(handler) -> tuple[GeminiClient, httpx.AsyncClient]:
-    transport = httpx.MockTransport(handler)
-    http = httpx.AsyncClient(transport=transport)
-    return (
-        GeminiClient(
-            http=http,
-            api_key="k",
-            model="m",
-            base_url="https://example.com/v1beta",
-        ),
-        http,
-    )
-
 
 _EMPTY_TRANSLATION_JSON = json.dumps(
     {
@@ -49,17 +31,17 @@ _EMPTY_TRANSLATION_JSON = json.dumps(
 )
 
 
-def stub_translation_gemini() -> GeminiClient:
-    """Gemini stub for tests that exercise the approve path but don't care
+def stub_translation_llm() -> LlmClient:
+    """LLM stub for tests that exercise the approve path but don't care
     about translation content. Returns an empty translation on every call so
     `apply_approve`'s worker-field backfill (#58) doesn't hit the real API
     on a cache miss."""
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response(_EMPTY_TRANSLATION_JSON))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return reply(_EMPTY_TRANSLATION_JSON)
 
-    gemini, _ = _gemini_with_handler(handler)
-    return gemini
+    llm, _ = make_llm(handler)
+    return llm
 
 
 class _FakeTts:
@@ -125,11 +107,11 @@ def test_translate_route_returns_translation(http_client: TestClient):
         "alt_priority": "none",
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response(json.dumps(payload)))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return reply(json.dumps(payload))
 
-    gemini, _ = _gemini_with_handler(handler)
-    app.dependency_overrides[get_gemini] = lambda: gemini
+    llm, _ = make_llm(handler)
+    app.dependency_overrides[get_llm] = lambda: llm
 
     response = http_client.post(
         "/translate",
@@ -207,7 +189,7 @@ def test_approve_writes_anki_card_and_marks_synced(http_client: TestClient, tmp_
     anki_writer = AnkiWriter(root=anki_root)
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_anki_writer] = lambda: anki_writer
-    app.dependency_overrides[get_gemini] = stub_translation_gemini
+    app.dependency_overrides[get_llm] = stub_translation_llm
 
     create = http_client.post(
         "/vocab",
@@ -268,7 +250,7 @@ def test_approve_backfills_cloze_when_entry_missing_it(http_client: TestClient, 
     anki_writer = AnkiWriter(root=tmp_path / "anki")
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_anki_writer] = lambda: anki_writer
-    app.dependency_overrides[get_gemini] = stub_translation_gemini
+    app.dependency_overrides[get_llm] = stub_translation_llm
 
     create = http_client.post(
         "/vocab",
@@ -312,7 +294,7 @@ def test_approve_backfills_extra_fields_from_translation_cache(
     # collocations and sense_label — the worker writes them, but legacy rows
     # never went through it. Approving such an entry today must backfill
     # those fields from translate_with_cache before the Anki note is written.
-    # The cache is seeded directly so the path doesn't need a Gemini call.
+    # The cache is seeded directly so the path doesn't need an LLM call.
     storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
     anki_writer = AnkiWriter(root=tmp_path / "anki")
     app.dependency_overrides[get_storage] = lambda: storage
@@ -326,7 +308,7 @@ def test_approve_backfills_extra_fields_from_translation_cache(
     assert create.status_code == 201
     entry_id = create.json()["id"]
 
-    from vocab_api.gemini import _sentence_hash  # noqa: PLC0415 — local helper, test-only use
+    from vocab_api.llm import _sentence_hash  # noqa: PLC0415 — local helper, test-only use
 
     sh = _sentence_hash("A grand expedition north.")
     assert sh is not None
@@ -394,7 +376,7 @@ def test_approve_backfills_alt_fields_from_translation_cache(
     assert create.status_code == 201
     entry_id = create.json()["id"]
 
-    from vocab_api.gemini import _sentence_hash  # noqa: PLC0415 — local helper, test-only use
+    from vocab_api.llm import _sentence_hash  # noqa: PLC0415 — local helper, test-only use
 
     sh = _sentence_hash("I felt weary after the hike.")
     assert sh is not None

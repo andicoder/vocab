@@ -1,12 +1,13 @@
 import json
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from tests.llm_fake import make_llm, prompt_of, reply
 from vocab_api.config import settings
-from vocab_api.gemini import GeminiClient
+from vocab_api.llm import LlmClient
 from vocab_api.models import Entry
 from vocab_api.worker import WorkerDeps
 
@@ -33,16 +34,12 @@ def _empty_translation_json() -> dict:
     }
 
 
-def _gemini_responding_with(payload: dict) -> GeminiClient:
-    request_bodies = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        request_bodies.append(request.content.decode(errors="replace"))
+def _llm_responding_with(payload: dict) -> LlmClient:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         # Adapt the response to the request so each word produces a unique lemma
         resp = dict(payload)
         try:
-            body = json.loads(request.content)
-            contents = body["contents"][0]["parts"][0]["text"]
+            contents = prompt_of(request)
             # Translate requests contain "Word:"; invent-example requests
             # contain "Lemma:". Derive a unique lemma from the request.
             for line in contents.split("\n"):
@@ -55,11 +52,10 @@ def _gemini_responding_with(payload: dict) -> GeminiClient:
                     resp["cloze_sentence"] = cloze
         except Exception:
             pass
-        msg = {"content": {"parts": [{"text": json.dumps(resp)}]}, "finishReason": "STOP"}
-        return httpx.Response(200, json={"candidates": [msg]})
+        return reply(json.dumps(resp))
 
-    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    return GeminiClient(http=http, api_key="k", model="m", base_url="https://example.com")
+    llm, _ = make_llm(handler)
+    return llm
 
 
 def _configure_stub_deps():
@@ -90,7 +86,7 @@ def _configure_stub_deps():
             return 42
 
     mcp_server._worker_deps = WorkerDeps(
-        gemini=_gemini_responding_with(_empty_translation_json()),
+        llm=_llm_responding_with(_empty_translation_json()),
         tts=FakeTts(),
         storage=FakeStorage(),
         anki_writer=FakeAnki(),

@@ -1,30 +1,39 @@
 import json
 
-import httpx
+import anthropic
+import httpx2
 import pytest
 
-from vocab_api.gemini import (
+from vocab_api.llm import (
     _TRANSLATE_PROMPT,
-    GeminiClient,
     InventedExample,
+    LlmClient,
+    LlmOutputError,
     Plausibility,
     TranslationResult,
     _strip_low_value_alt,
 )
 
 
-def _gemini_response(text: str) -> dict:
-    return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]}
+def _message(text: str) -> dict:
+    return {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
 
 
-def _make_client(handler, *, api_key: str = "secret", model: str = "gemini-2.5-flash-lite"):
-    transport = httpx.MockTransport(handler)
-    http = httpx.AsyncClient(transport=transport)
-    client = GeminiClient(
-        http=http,
-        api_key=api_key,
-        model=model,
-        base_url="https://example.com/v1beta",
+def _make_client(handler, *, api_key: str = "secret"):
+    http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+    client = LlmClient(
+        anthropic.AsyncAnthropic(
+            base_url="https://gateway.example", api_key=api_key, http_client=http, max_retries=0
+        )
     )
     return client, http
 
@@ -42,8 +51,8 @@ async def test_translate_returns_parsed_result():
         }
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response(payload))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_message(payload))
 
     client, http = _make_client(handler)
     try:
@@ -72,7 +81,7 @@ async def test_translate_returns_parsed_result():
 
 
 async def test_translate_defaults_collocations_to_empty_list_when_omitted():
-    # Real Gemini responses are noisy; treat a missing field as "no
+    # Real LLM responses are noisy; treat a missing field as "no
     # collocations" rather than a hard failure so the worker can still
     # ship the card.
     payload = json.dumps(
@@ -84,8 +93,8 @@ async def test_translate_defaults_collocations_to_empty_list_when_omitted():
         }
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response(payload))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_message(payload))
 
     client, http = _make_client(handler)
     try:
@@ -99,11 +108,11 @@ async def test_translate_defaults_collocations_to_empty_list_when_omitted():
 async def test_translate_prompt_asks_for_collocations():
     captured: dict = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
+        return httpx2.Response(
             200,
-            json=_gemini_response(
+            json=_message(
                 json.dumps(
                     {
                         "lemma": "decision",
@@ -122,7 +131,7 @@ async def test_translate_prompt_asks_for_collocations():
     finally:
         await http.aclose()
 
-    prompt = captured["body"]["contents"][0]["parts"][0]["text"]
+    prompt = captured["body"]["messages"][0]["content"]
     assert "collocations" in prompt
     # The prompt should anchor the shape with at least one example collocation
     # so the model doesn't return single-word entries.
@@ -143,8 +152,8 @@ async def test_translate_returns_extra_examples():
         }
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response(payload))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_message(payload))
 
     client, http = _make_client(handler)
     try:
@@ -159,7 +168,7 @@ async def test_translate_returns_extra_examples():
 
 
 async def test_translate_defaults_extra_examples_to_empty_list_when_omitted():
-    # Same defensive default as collocations — a stripped-down Gemini
+    # Same defensive default as collocations — a stripped-down LLM
     # response shouldn't fail card creation.
     payload = json.dumps(
         {
@@ -170,8 +179,8 @@ async def test_translate_defaults_extra_examples_to_empty_list_when_omitted():
         }
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response(payload))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_message(payload))
 
     client, http = _make_client(handler)
     try:
@@ -185,11 +194,11 @@ async def test_translate_defaults_extra_examples_to_empty_list_when_omitted():
 async def test_translate_prompt_asks_for_extra_examples_in_other_contexts():
     captured: dict = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
+        return httpx2.Response(
             200,
-            json=_gemini_response(
+            json=_message(
                 json.dumps(
                     {
                         "lemma": "x",
@@ -208,7 +217,7 @@ async def test_translate_prompt_asks_for_extra_examples_in_other_contexts():
     finally:
         await http.aclose()
 
-    prompt = captured["body"]["contents"][0]["parts"][0]["text"]
+    prompt = captured["body"]["messages"][0]["content"]
     assert "extra_examples" in prompt
     # The prompt should specifically ask for sentences in different contexts
     # than the source — otherwise the model just rephrases the same scene.
@@ -218,11 +227,11 @@ async def test_translate_prompt_asks_for_extra_examples_in_other_contexts():
 async def test_translate_prompt_asks_for_sense_key_and_label():
     captured: dict = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
+        return httpx2.Response(
             200,
-            json=_gemini_response(
+            json=_message(
                 json.dumps(
                     {
                         "lemma": "train",
@@ -242,7 +251,7 @@ async def test_translate_prompt_asks_for_sense_key_and_label():
     finally:
         await http.aclose()
 
-    prompt_text = captured["body"]["contents"][0]["parts"][0]["text"]
+    prompt_text = captured["body"]["messages"][0]["content"]
     # Anchor the slug shape and the disambiguation label in the prompt so the
     # model returns consistent values across calls (#24).
     assert "sense_key" in prompt_text
@@ -251,68 +260,61 @@ async def test_translate_prompt_asks_for_sense_key_and_label():
     assert "verb-" in prompt_text or "noun-" in prompt_text
 
 
-async def test_translate_hits_correct_endpoint_and_passes_api_key():
+async def test_translate_asks_the_gateway_for_the_translate_alias():
     captured: dict = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["url"] = str(request.url)
         captured["headers"] = dict(request.headers)
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
+        return httpx2.Response(
             200,
-            json=_gemini_response(
+            json=_message(
                 json.dumps({"lemma": "x", "translation": "y", "alternatives": "", "ipa": ""})
             ),
         )
 
-    client, http = _make_client(handler, api_key="topsecret", model="gemini-2.5-flash-lite")
+    client, http = _make_client(handler, api_key="topsecret")
     try:
         await client.translate(word="x", sentence=None)
     finally:
         await http.aclose()
 
-    assert captured["url"].startswith(
-        "https://example.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
-    )
-    # Key must travel as a header, not a query param — query strings show up
-    # in httpx exception messages and leak into pod logs (#15).
-    assert "key=" not in captured["url"]
-    assert "topsecret" not in captured["url"]
-    assert captured["headers"].get("x-goog-api-key") == "topsecret"
-    assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
-    prompt_text = captured["body"]["contents"][0]["parts"][0]["text"]
-    assert "x" in prompt_text
+    assert captured["url"] == "https://gateway.example/v1/messages"
+    assert captured["headers"]["authorization"] == "Bearer topsecret"
+    # The gateway maps the task alias to a model; vocab never names one.
+    assert captured["body"]["model"] == "vocab-translate"
+    assert captured["body"]["output_config"]["format"]["type"] == "json_schema"
+    # Sonnet 5.5 answers any non-default temperature with a 400 (#641).
+    assert "temperature" not in captured["body"]
+    assert "x" in captured["body"]["messages"][0]["content"]
 
 
-async def test_translate_5xx_does_not_leak_api_key_in_exception_message():
-    # Regression for #15. httpx renders the full request URL inside
-    # HTTPStatusError, so a logged stack trace would dump the API key if it
-    # were a query parameter.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(503, text="Service Unavailable")
+async def test_translate_gateway_error_does_not_leak_api_key_in_exception_message():
+    # Regression for #15: a logged stack trace must not carry the key.
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(503, json={"error": {"message": "Service Unavailable"}})
 
-    client, http = _make_client(handler, api_key="AIza-topsecret-123")
+    client, http = _make_client(handler, api_key="sk-topsecret-123")
     try:
-        with pytest.raises(httpx.HTTPStatusError) as excinfo:
+        with pytest.raises(anthropic.APIStatusError) as excinfo:
             await client.translate(word="x", sentence=None)
     finally:
         await http.aclose()
 
-    err_text = str(excinfo.value)
-    assert "AIza-topsecret-123" not in err_text
-    assert "key=" not in err_text
+    assert "sk-topsecret-123" not in str(excinfo.value)
 
 
 async def test_translate_prompt_includes_part_of_speech_guidance():
-    # Regression for #11: without per-PoS instructions Gemini falls back to
+    # Regression for #11: without per-PoS instructions the model falls back to
     # noun-shaped output ("der geniale") for adjectives/verbs.
     captured: dict = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
+        return httpx2.Response(
             200,
-            json=_gemini_response(
+            json=_message(
                 json.dumps({"lemma": "x", "translation": "y", "alternatives": "", "ipa": ""})
             ),
         )
@@ -323,7 +325,7 @@ async def test_translate_prompt_includes_part_of_speech_guidance():
     finally:
         await http.aclose()
 
-    prompt_text = captured["body"]["contents"][0]["parts"][0]["text"]
+    prompt_text = captured["body"]["messages"][0]["content"]
     assert "part of speech" in prompt_text.lower()
     assert "verbs" in prompt_text and "infinitive" in prompt_text
     assert "adjectives" in prompt_text
@@ -331,20 +333,20 @@ async def test_translate_prompt_includes_part_of_speech_guidance():
 
 
 async def test_translate_raises_on_http_error():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, text="boom")
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(500, text="boom")
 
     client, http = _make_client(handler)
     try:
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(anthropic.InternalServerError):
             await client.translate(word="x", sentence=None)
     finally:
         await http.aclose()
 
 
 async def test_plausibility_yes():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response("YES"))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_message("YES"))
 
     client, http = _make_client(handler)
     try:
@@ -365,8 +367,8 @@ async def test_plausibility_yes():
 
 
 async def test_plausibility_extracts_verdict_from_prose():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response("Unclear — the context is ambiguous."))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_message("Unclear — the context is ambiguous."))
 
     client, http = _make_client(handler)
     try:
@@ -384,8 +386,8 @@ async def test_plausibility_extracts_verdict_from_prose():
 
 
 async def test_plausibility_unparseable_falls_back_to_unclear():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response("¯\\_(ツ)_/¯"))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_message("¯\\_(ツ)_/¯"))
 
     client, http = _make_client(handler)
     try:
@@ -400,6 +402,44 @@ async def test_plausibility_unparseable_falls_back_to_unclear():
     assert verdict == "UNCLEAR"
 
 
+async def test_plausibility_asks_for_its_alias_and_reads_past_thinking_blocks():
+    captured: dict = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = json.loads(request.content)
+        body = _message("NO")
+        body["content"].insert(0, {"type": "thinking", "thinking": "", "signature": "sig"})
+        return httpx2.Response(200, json=body)
+
+    client, http = _make_client(handler)
+    try:
+        verdict = await client.plausibility(
+            word="x",
+            sentence=None,
+            translation=TranslationResult(lemma="x", translation="y", alternatives="", ipa=""),
+        )
+    finally:
+        await http.aclose()
+
+    assert captured["body"]["model"] == "vocab-plausibility"
+    assert verdict == "NO"
+
+
+async def test_translate_refusal_raises_instead_of_returning_an_empty_card():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        body = _message("")
+        body["content"] = []
+        body["stop_reason"] = "refusal"
+        return httpx2.Response(200, json=body)
+
+    client, http = _make_client(handler)
+    try:
+        with pytest.raises(LlmOutputError):
+            await client.translate(word="x", sentence=None)
+    finally:
+        await http.aclose()
+
+
 async def test_invent_example_returns_sentence_and_cloze():
     payload = json.dumps(
         {
@@ -408,8 +448,8 @@ async def test_invent_example_returns_sentence_and_cloze():
         }
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response(payload))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, json=_message(payload))
 
     client, http = _make_client(handler)
     try:
@@ -426,11 +466,11 @@ async def test_invent_example_returns_sentence_and_cloze():
 async def test_invent_example_prompt_includes_lemma_and_asks_for_json():
     captured: dict = {}
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
+        return httpx2.Response(
             200,
-            json=_gemini_response(json.dumps({"sentence": "x.", "cloze_sentence": "___."})),
+            json=_message(json.dumps({"sentence": "x.", "cloze_sentence": "___."})),
         )
 
     client, http = _make_client(handler)
@@ -439,10 +479,11 @@ async def test_invent_example_prompt_includes_lemma_and_asks_for_json():
     finally:
         await http.aclose()
 
-    prompt_text = captured["body"]["contents"][0]["parts"][0]["text"]
+    prompt_text = captured["body"]["messages"][0]["content"]
     assert "expedition" in prompt_text
     assert "___" in prompt_text  # the prompt must instruct the model on the gap marker
-    assert captured["body"]["generationConfig"]["responseMimeType"] == "application/json"
+    assert captured["body"]["model"] == "vocab-example"
+    assert captured["body"]["output_config"]["format"]["type"] == "json_schema"
 
 
 # --- #63: deterministic post-filter for alt-classification false positives ---
@@ -545,6 +586,20 @@ def test_strip_low_value_alt_is_noop_when_no_alt():
     assert _strip_low_value_alt(result) == result
 
 
+def test_strip_low_value_alt_drops_an_alt_the_model_itself_rated_none():
+    # Seen in the first smoke run through the gateway: Sonnet answered
+    # `purses` with alt_priority "none" and still filled alt_lemma
+    # "handbag", which the worker would have put on the card.
+    result = _alt_result("purse", "handbag", alt_priority="none")
+
+    stripped = _strip_low_value_alt(result)
+
+    assert stripped.alt_lemma == ""
+    assert stripped.alt_translation == ""
+    assert stripped.alt_examples == []
+    assert stripped.alt_priority == "none"
+
+
 def test_translate_prompt_documents_alt_classification_negative_rules():
     # #63: pin the three negative rules into the prompt as a regression
     # guard. The deterministic filter catches AE/BE +s suffixes and
@@ -553,17 +608,17 @@ def test_translate_prompt_documents_alt_classification_negative_rules():
     # the less-common AE/BE patterns the filter does not enumerate.
     prompt = _TRANSLATE_PROMPT
     assert "AE/BE" in prompt or "American" in prompt, (
-        "prompt must explicitly tell Gemini not to flag AE/BE orthographic variants"
+        "prompt must explicitly tell the model not to flag AE/BE orthographic variants"
     )
     assert "compound" in prompt.lower(), (
-        "prompt must explicitly tell Gemini not to suggest compound expansions"
+        "prompt must explicitly tell the model not to suggest compound expansions"
     )
     assert "strip a distinct sense" in prompt.lower() or "narrow" in prompt.lower(), (
         "prompt must warn against alternatives that strip a sense the lemma carries"
     )
     # After the post-merge calibration (#63 smoke test): the prompt must
     # also positively show what to flag, otherwise the negative rules tip
-    # Gemini into refusing every alt (`beneath → under` got dropped).
+    # the model into refusing every alt (`beneath → under` got dropped).
     assert "beneath" in prompt.lower(), (
         "prompt must keep concrete positive examples (e.g. `beneath → under`) "
         "to balance the negative rules and prevent over-conservatism"

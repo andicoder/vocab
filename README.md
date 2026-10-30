@@ -2,7 +2,7 @@
 
 Self-hosted vocab + translator + Anki-card-builder service for the family.
 
-Collect words from any source (browser right-click, mobile share, Kindle import, manual) → translate with **Gemini Flash-Lite** (lemma, translation, alternatives, IPA, plausibility check, per-sense disambiguation) → generate audio via **edge-tts** → write finished **active-recall cards** (gap sentence on the front, word + audio + full sentence on the back) directly into our own **Anki sync server** → all Anki devices pick them up on the next normal sync.
+Collect words from any source (browser right-click, mobile share, Kindle import, manual) → translate through a central **LLM gateway** (LiteLLM, Anthropic Messages API; lemma, translation, alternatives, IPA, plausibility check, per-sense disambiguation) → generate audio via **edge-tts** → write finished **active-recall cards** (gap sentence on the front, word + audio + full sentence on the back) directly into our own **Anki sync server** → all Anki devices pick them up on the next normal sync.
 
 [![CI](https://github.com/andicoder/vocab/actions/workflows/build.yml/badge.svg)](https://github.com/andicoder/vocab/actions/workflows/build.yml)
 
@@ -10,7 +10,7 @@ Architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · Conventions: [`C
 
 ## Stack
 
-Python 3.12 · FastAPI · SQLAlchemy 2.x async · asyncpg · Alembic · Pydantic v2 · htmx (web UI) · edge-tts · Gemini API.
+Python 3.12 · FastAPI · SQLAlchemy 2.x async · asyncpg · Alembic · Pydantic v2 · htmx (web UI) · edge-tts · Anthropic SDK (against the LLM gateway).
 
 ## Quickstart
 
@@ -49,11 +49,10 @@ All runtime config flows through `vocab_api.config.Settings` (Pydantic) and is o
 | `VOCAB_LOG_LEVEL` | `INFO` | Root log level (`DEBUG`/`INFO`/`WARNING`/`ERROR`). See [`CLAUDE.md`](CLAUDE.md#logging) for level discipline. |
 | `VOCAB_UI_DEFAULT_LOCALE` | `de` | Fallback UI locale when `Accept-Language` doesn't match a `locales/*.json`. |
 | `VOCAB_PUBLIC_BASE_URL` | empty | Absolute base URL embedded in the bookmarklet (e.g. `https://vocab.example.com`). Falls back to `request.base_url` if empty. |
-| **Gemini** | | |
-| `VOCAB_GEMINI_API_KEY` | empty | Required for translation/plausibility. Empty disables the worker translation step (entries stay `pending`). |
-| `VOCAB_GEMINI_MODEL` | `gemini-2.5-flash-lite` | Model id. |
-| `VOCAB_GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` | API base. Override for proxies/tests. |
-| `VOCAB_GEMINI_TIMEOUT_S` | `10.0` | Per-request HTTP timeout. |
+| **LLM gateway** | | |
+| `VOCAB_LLM_BASE_URL` | empty | Base URL of the LLM gateway, which speaks the Anthropic Messages API (`/v1/messages`). vocab asks for the task aliases `vocab-translate`, `vocab-plausibility` and `vocab-example`; the gateway decides which model answers each. |
+| `VOCAB_LLM_API_KEY` | empty | vocab's own key at the gateway. Required for translation/plausibility. Empty disables the worker translation step (entries stay `pending`). |
+| `VOCAB_LLM_TIMEOUT_S` | `10.0` | Per-request HTTP timeout, and how long an inline add waits before leaving the entry to the worker. |
 | **Audio (TTS + storage)** | | |
 | `VOCAB_AUDIO_VOICE` | `en-US-AriaNeural` | edge-tts voice for synthesis. |
 | `VOCAB_AUDIO_LOCAL_DIR` | `./var/audio` | Filesystem path for `LocalDirAudioStorage` (used when no S3 endpoint is configured). |
@@ -74,7 +73,8 @@ A minimal local `.env` for development:
 
 ```sh
 VOCAB_DATABASE_URL=postgresql+asyncpg://vocab:vocab@localhost:5432/vocab
-VOCAB_GEMINI_API_KEY=your-key-here
+VOCAB_LLM_BASE_URL=http://192.168.178.22:4000
+VOCAB_LLM_API_KEY=your-gateway-key
 VOCAB_LOG_LEVEL=DEBUG
 ```
 
@@ -85,7 +85,7 @@ Cards follow the active-recall pattern from Wozniak's *20 Rules of Formulating K
 - **Front**: the source sentence with the target word replaced by `___`, plus a short German hint that disambiguates which word is being asked for. The user has to *produce* the English word from context — recognition cards alone build no productive vocabulary.
 - **Back**: the word, audio (edge-tts), the full source sentence, alternative translations and IPA.
 
-Polysemous words (`train` = railway / to exercise) land as **one card per meaning** — Gemini emits a stable `sense_key` slug so a second encounter under a different sense creates a second card, while a second encounter under the same sense is still dropped as a duplicate.
+Polysemous words (`train` = railway / to exercise) land as **one card per meaning** — the model emits a stable `sense_key` slug so a second encounter under a different sense creates a second card, while a second encounter under the same sense is still dropped as a duplicate.
 
 Each user picks a **card direction** via `PATCH /me/settings`:
 
@@ -134,7 +134,7 @@ Kindle e-readers keep your vocabulary lookups in `system/vocabulary/vocab.db` (a
 
 ### Upload via the UI
 
-Open `/queue`, scroll to the *Kindle import* section, pick the `vocab.db` and click **Hochladen**. The toast tells you how many words were new vs. already in your collection. New entries pick up Gemini translation + audio in the background worker (1 req/s).
+Open `/queue`, scroll to the *Kindle import* section, pick the `vocab.db` and click **Hochladen**. The toast tells you how many words were new vs. already in your collection. New entries pick up translation + audio in the background worker (1 req/s).
 
 ### Upload via the API
 

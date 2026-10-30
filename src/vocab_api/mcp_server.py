@@ -2,14 +2,13 @@ import hmac
 import logging
 from typing import Any
 
-import httpx
 from sqlalchemy import select
 
 from .anki_writer import AnkiBackend
 from .audio import EdgeTtsClient, make_storage_from_settings
 from .config import settings
 from .db import SessionLocal
-from .gemini import GeminiClient
+from .llm import LlmClient
 from .models import User
 from .operations import ApprovalDeps, ApprovePayload
 from .schemas import EntryCreate
@@ -32,13 +31,7 @@ def _create_deps_from_settings() -> WorkerDeps:
 
     from .anki_sync import AnkiSyncWriter, parse_credentials_json
 
-    http_client = httpx.AsyncClient(timeout=settings.gemini_timeout_s)
-    gemini = GeminiClient(
-        http=http_client,
-        api_key=settings.gemini_api_key,
-        model=settings.gemini_model,
-        base_url=settings.gemini_base_url,
-    )
+    llm = LlmClient.from_settings(settings)
     tts = EdgeTtsClient()
     storage = make_storage_from_settings()
 
@@ -55,7 +48,7 @@ def _create_deps_from_settings() -> WorkerDeps:
         anki_writer = AnkiWriter(root=_Path(settings.anki_collection_root))
 
     return WorkerDeps(
-        gemini=gemini,
+        llm=llm,
         tts=tts,
         storage=storage,
         anki_writer=anki_writer,
@@ -131,7 +124,7 @@ async def vocab_add(
             user=user,
             payload=payload,
             deps=_worker_deps,
-            timeout=settings.gemini_timeout_s,
+            timeout=settings.llm_timeout_s,
         )
 
     return {
@@ -206,7 +199,7 @@ async def vocab_approve(  # noqa: PLR0913 — MCP tool signature is the client i
         deps = ApprovalDeps(
             storage=_worker_deps.storage,
             anki_writer=_worker_deps.anki_writer,
-            gemini=_worker_deps.gemini,
+            llm=_worker_deps.llm,
             tts=_worker_deps.tts,
             cache_session_factory=_worker_deps.cache_session_factory,
             voice=_worker_deps.voice,
@@ -258,7 +251,7 @@ async def vocab_translate(
     if _worker_deps is None:
         raise RuntimeError("MCP server not configured — worker deps missing")
 
-    result = await translate_word(gemini=_worker_deps.gemini, word=word, sentence=sentence)
+    result = await translate_word(llm=_worker_deps.llm, word=word, sentence=sentence)
 
     return {
         "word": word,

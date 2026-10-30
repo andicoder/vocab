@@ -1,10 +1,13 @@
-import httpx
+import json
+
+import httpx2
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from tests.llm_fake import make_llm, reply
 from vocab_api.audio import TtsClient
 from vocab_api.config import settings
-from vocab_api.gemini import GeminiClient, TranslationResult
+from vocab_api.llm import LlmClient, TranslationResult
 from vocab_api.models import Entry, User
 from vocab_api.schemas import EntryCreate
 from vocab_api.vocab_service import add_entry, list_entries, reject_entry, translate_word
@@ -15,12 +18,12 @@ from vocab_api.worker import WorkerDeps
 def deps_factory():
     """Build a WorkerDeps with stubs for async collaborators.
 
-    Every test that needs WorkerDeps must provide at least a gemini stub;
+    Every test that needs WorkerDeps must provide at least a llm stub;
     the factory fills in harmless defaults for the rest (they must not be
     exercised by the test under test — the test will fail if they are).
     """
 
-    def _make(*, gemini: GeminiClient, tts: TtsClient | None = None) -> WorkerDeps:
+    def _make(*, llm: LlmClient, tts: TtsClient | None = None) -> WorkerDeps:
         engine = create_async_engine(settings.database_url)
         factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -43,7 +46,7 @@ def deps_factory():
                 return 99
 
         return WorkerDeps(
-            gemini=gemini,
+            llm=llm,
             tts=tts or _FakeTts(),
             storage=_FakeStorage(),
             anki_writer=_FakeAnki(),
@@ -72,9 +75,8 @@ _EXPEDITION_JSON = {
 }
 
 
-def _expedition_handler(request: httpx.Request) -> httpx.Response:
-    candidates = [{"content": {"parts": [{"text": __import__("json").dumps(_EXPEDITION_JSON)}]}}]
-    return httpx.Response(200, json={"candidates": candidates})
+def _expedition_handler(request: httpx2.Request) -> httpx2.Response:
+    return reply(json.dumps(_EXPEDITION_JSON))
 
 
 @pytest.mark.asyncio
@@ -83,9 +85,8 @@ async def test_add_entry_creates_entry_and_returns_translation(db_session, deps_
     db_session.add(user)
     await db_session.flush()
 
-    http = httpx.AsyncClient(transport=httpx.MockTransport(_expedition_handler))
-    gemini = GeminiClient(http=http, api_key="k", model="m", base_url="https://example.com")
-    deps = deps_factory(gemini=gemini)
+    llm, _ = make_llm(_expedition_handler)
+    deps = deps_factory(llm=llm)
 
     payload = EntryCreate(word="expedition", sentence="A grand expedition north.")
     entry = await add_entry(session=db_session, user=user, payload=payload, deps=deps, timeout=5.0)
@@ -107,16 +108,15 @@ async def test_add_entry_handles_timeout_gracefully(db_session, deps_factory):
         import asyncio
 
         await asyncio.sleep(10)
-        return httpx.Response(200)
+        return httpx2.Response(200)
 
-    http = httpx.AsyncClient(transport=httpx.MockTransport(slow_handler))
-    gemini = GeminiClient(http=http, api_key="k", model="m", base_url="https://example.com")
-    deps = deps_factory(gemini=gemini)
+    llm, _ = make_llm(slow_handler)
+    deps = deps_factory(llm=llm)
 
     payload = EntryCreate(word="expedition")
     entry = await add_entry(session=db_session, user=user, payload=payload, deps=deps, timeout=0.01)
 
-    # Entry was saved even though Gemini timed out
+    # Entry was saved even though the LLM timed out
     assert entry.id is not None
     assert entry.status == "pending"
 
@@ -135,9 +135,8 @@ async def test_add_entry_keeps_entry_pending_when_audio_synthesis_fails(
         async def synthesize(self, *, text: str, voice: str) -> bytes:
             raise RuntimeError("403, message='Invalid response status'")
 
-    http = httpx.AsyncClient(transport=httpx.MockTransport(_expedition_handler))
-    gemini = GeminiClient(http=http, api_key="k", model="m", base_url="https://example.com")
-    deps = deps_factory(gemini=gemini, tts=_BrokenTts())
+    llm, _ = make_llm(_expedition_handler)
+    deps = deps_factory(llm=llm, tts=_BrokenTts())
 
     payload = EntryCreate(word="expedition")
     entry = await add_entry(session=db_session, user=user, payload=payload, deps=deps, timeout=5.0)
@@ -263,13 +262,11 @@ async def test_translate_word_returns_translation():
         "alt_priority": "none",
     }
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        candidates = [{"content": {"parts": [{"text": __import__("json").dumps(response_json)}]}}]
-        return httpx.Response(200, json={"candidates": candidates})
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return reply(json.dumps(response_json))
 
-    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    gemini = GeminiClient(http=http, api_key="k", model="m", base_url="https://example.com")
+    llm, _ = make_llm(handler)
 
-    result = await translate_word(gemini=gemini, word="expedition", sentence="A trip north.")
+    result = await translate_word(llm=llm, word="expedition", sentence="A trip north.")
     assert isinstance(result, TranslationResult)
     assert result.translation == "die Expedition"

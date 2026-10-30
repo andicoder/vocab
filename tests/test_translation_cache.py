@@ -1,21 +1,18 @@
 import json
 
-import httpx
+import httpx2
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.llm_fake import make_llm, reply
 from vocab_api.db import SessionLocal
-from vocab_api.gemini import (
-    GeminiClient,
+from vocab_api.llm import (
+    LlmClient,
     TranslationRequest,
     TranslationResult,
     translate_with_cache,
 )
 from vocab_api.models import TranslationCache
-
-
-def _gemini_response(text: str) -> dict:
-    return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]}
 
 
 def _payload(translation: str = "die Expedition") -> str:
@@ -38,34 +35,24 @@ def _payload(translation: str = "die Expedition") -> str:
     )
 
 
-def _client(handler) -> tuple[GeminiClient, httpx.AsyncClient]:
-    transport = httpx.MockTransport(handler)
-    http = httpx.AsyncClient(transport=transport)
-    return (
-        GeminiClient(
-            http=http,
-            api_key="k",
-            model="gemini-2.5-flash-lite",
-            base_url="https://example.com/v1beta",
-        ),
-        http,
-    )
+def _client(handler) -> tuple[LlmClient, httpx2.AsyncClient]:
+    return make_llm(handler)
 
 
-async def test_cache_miss_calls_gemini_and_stores(db_session: AsyncSession):
+async def test_cache_miss_calls_llm_and_stores(db_session: AsyncSession):
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(200, json=_gemini_response(_payload()))
+        return reply(_payload())
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         result = await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="expedition", sentence="A grand expedition north."),
         )
     finally:
@@ -89,26 +76,26 @@ async def test_cache_miss_calls_gemini_and_stores(db_session: AsyncSession):
     assert rows[0].sentence_hash is not None
 
 
-async def test_cache_hit_skips_gemini(db_session: AsyncSession):
+async def test_cache_hit_skips_llm(db_session: AsyncSession):
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(200, json=_gemini_response(_payload()))
+        return reply(_payload())
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="expedition", sentence="A grand expedition north."),
         )
         result = await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="expedition", sentence="A grand expedition north."),
         )
     finally:
@@ -121,21 +108,21 @@ async def test_cache_hit_skips_gemini(db_session: AsyncSession):
 async def test_cache_distinguishes_by_sentence(db_session: AsyncSession):
     payloads = iter([_payload("die Bank"), _payload("das Ufer")])
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=_gemini_response(next(payloads)))
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return reply(next(payloads))
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         first = await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="bank", sentence="I deposited money at the bank."),
         )
         second = await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="bank", sentence="We sat on the river bank."),
         )
     finally:
@@ -154,7 +141,7 @@ async def test_cache_row_with_empty_collocations_and_extras_is_treated_as_miss(
     # Regression for #43: the migrations that added `collocations` and
     # `extra_examples` to translation_cache backfilled existing rows
     # with `''` (NOT NULL DEFAULT ''). Treating such a row as a cache
-    # hit would permanently shadow Gemini's new behavior for the
+    # hit would permanently shadow the model's new behavior for the
     # affected words. The reader skips these rows so they get
     # overwritten on the next translate.
     #
@@ -180,7 +167,7 @@ async def test_cache_row_with_empty_collocations_and_extras_is_treated_as_miss(
 
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
         payload = json.dumps(
@@ -193,20 +180,20 @@ async def test_cache_row_with_empty_collocations_and_extras_is_treated_as_miss(
                 "extra_examples": ["She joined an expedition to the Amazon."],
             }
         )
-        return httpx.Response(200, json=_gemini_response(payload))
+        return reply(payload)
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         result = await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="expedition", sentence=None),
         )
     finally:
         await http.aclose()
 
-    assert calls == 1, "stale cache row should not have short-circuited Gemini"
+    assert calls == 1, "stale cache row should not have short-circuited the LLM"
     assert result.translation == "die Expedition"
     assert result.collocations == ["go on an expedition"]
 
@@ -238,23 +225,23 @@ async def test_cache_row_with_empty_alt_priority_is_treated_as_miss(
 
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(200, json=_gemini_response(_payload(translation="müde")))
+        return reply(_payload(translation="müde"))
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="weary", sentence=None),
         )
     finally:
         await http.aclose()
 
-    assert calls == 1, "row with empty alt_priority should not have short-circuited Gemini"
+    assert calls == 1, "row with empty alt_priority should not have short-circuited the LLM"
 
 
 async def test_cache_row_with_only_one_field_populated_still_hits(
@@ -284,17 +271,17 @@ async def test_cache_row_with_only_one_field_populated_still_hits(
 
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(200, json=_gemini_response(_payload()))
+        return reply(_payload())
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         result = await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="however", sentence=None),
         )
     finally:
@@ -307,7 +294,7 @@ async def test_cache_row_with_only_one_field_populated_still_hits(
 
 async def test_stale_cache_row_is_refreshed_on_miss(db_session: AsyncSession):
     # Regression for #64: when the reader skips a stale pre-#60 row
-    # (`alt_priority=''`) and falls through to Gemini, the fresh row must
+    # (`alt_priority=''`) and falls through to the LLM, the fresh row must
     # *replace* the stale one on write. Previously the write path was
     # `session.add(...) except IntegrityError: pass`, so the UNIQUE conflict
     # against the stale row silently dropped the fresh result and the cache
@@ -332,7 +319,7 @@ async def test_stale_cache_row_is_refreshed_on_miss(db_session: AsyncSession):
             )
         )
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         payload = json.dumps(
             {
                 "lemma": "weary",
@@ -349,14 +336,14 @@ async def test_stale_cache_row_is_refreshed_on_miss(db_session: AsyncSession):
                 "alt_priority": "minor",
             }
         )
-        return httpx.Response(200, json=_gemini_response(payload))
+        return reply(payload)
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="weary", sentence=None),
         )
     finally:
@@ -408,23 +395,23 @@ async def test_cache_hit_strips_false_positive_alt(db_session: AsyncSession):
 
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(200, json=_gemini_response(_payload()))
+        return reply(_payload())
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         result = await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="toward", sentence=None),
         )
     finally:
         await http.aclose()
 
-    assert calls == 0, "filtered alt is still a cache hit; no Gemini call needed"
+    assert calls == 0, "filtered alt is still a cache hit; no LLM call needed"
     assert result.alt_lemma == "", "AE/BE false-positive alt must be stripped on read"
     assert result.alt_priority == "none"
 
@@ -434,10 +421,10 @@ async def test_fresh_translate_strips_false_positive_alt_before_caching(
 ):
     # Companion to test_cache_hit_strips_false_positive_alt: new translations
     # are filtered before they hit the cache, so a false-positive alt from
-    # Gemini never gets persisted in the first place. Belt-and-braces with
+    # the model never gets persisted in the first place. Belt-and-braces with
     # the on-read filter — but it matters for downstream consumers that may
     # query the cache table directly (debugging dashboards, manual SQL).
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         payload = json.dumps(
             {
                 "lemma": "conscious",
@@ -454,14 +441,14 @@ async def test_fresh_translate_strips_false_positive_alt_before_caching(
                 "alt_priority": "preferred",
             }
         )
-        return httpx.Response(200, json=_gemini_response(payload))
+        return reply(payload)
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         result = await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="conscious", sentence=None),
         )
     finally:
@@ -483,23 +470,23 @@ async def test_fresh_translate_strips_false_positive_alt_before_caching(
 async def test_cache_with_no_sentence_uses_null_hash(db_session: AsyncSession):
     calls = 0
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(200, json=_gemini_response(_payload()))
+        return reply(_payload())
 
-    gemini, http = _client(handler)
+    llm, http = _client(handler)
     try:
         await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="expedition", sentence=None),
         )
         await translate_with_cache(
             session=db_session,
             cache_session_factory=SessionLocal,
-            gemini=gemini,
+            llm=llm,
             request=TranslationRequest(word="expedition", sentence=None),
         )
     finally:

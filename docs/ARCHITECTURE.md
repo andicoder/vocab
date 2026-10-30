@@ -11,13 +11,13 @@ The infrastructure side (Authentik deployment, k8s manifests, ingress, DNS, Anki
 A self-hosted vocab/translation service for the whole family that …
 
 - collects words from any source (browser right-click, mobile share, Kindle import, manual entry).
-- translates each word with sentence context via **Gemini Flash-Lite** — including lemma, alternatives, IPA, plausibility check.
+- translates each word with sentence context through a central **LLM gateway** — including lemma, alternatives, IPA, plausibility check.
 - generates **audio (TTS via `edge-tts`)** per word, MP3 in Hetzner Object Storage (or a local directory in dev).
 - writes the finished cards directly into our **own Anki sync server in the cluster** — every Anki device picks them up on the next regular sync.
 - is **multi-user from day one** (Authentik with one account per family member).
 - is reachable from anywhere, secured behind SSO (**Authentik**).
 
-**Architecture constraint:** the service runs **entirely in the cluster**. No workstation dependency. LLM = Gemini (external via API). Anki sync = the official Anki sync server (`python -m anki.syncserver`) in the cluster, replacing AnkiWeb.
+**Architecture constraint:** the service runs **entirely in the cluster**. No workstation dependency. LLM = whatever the house LLM gateway (LiteLLM) maps vocab's task aliases to. Anki sync = the official Anki sync server (`python -m anki.syncserver`) in the cluster, replacing AnkiWeb.
 
 ### Out of scope
 
@@ -54,7 +54,7 @@ A self-hosted vocab/translation service for the whole family that …
 │       │                                                                   │
 │       ▼                                                                   │
 │  ┌─ vocab-api (this repo) ─────────────────────────────────────────┐     │
-│  │  FastAPI + htmx UI + Gemini client + edge-tts                    │     │
+│  │  FastAPI + htmx UI + LLM client + edge-tts                       │     │
 │  │  endpoints: /, /queue, /bookmarklet, POST /vocab, /translate,    │     │
 │  │             /audio/{word}.mp3, /import/kindle, /vocab/{id}/...   │     │
 │  │  in-process worker: pending → translated → auto-approved/        │     │
@@ -79,7 +79,7 @@ A self-hosted vocab/translation service for the whole family that …
 └────────────────────────────────────────────────────────────┼──────────────┘
                                                              │ HTTPS
                                                              ▼
-                                                  ┌─ Gemini API (external) ┐
+                                                  ┌─ LLM gateway (LiteLLM) ┐
                                                   │  translation + lemma   │
                                                   │  + alternatives + IPA  │
                                                   │  + plausibility check  │
@@ -172,7 +172,7 @@ CREATE TABLE vocab.audio_cache (
 
 **Translation trigger:** try synchronously on `POST /vocab` (cache lookup first). On timeout → status `pending`, an in-process async background worker picks it up.
 
-**Auto-approve flow:** after a successful translation call, run the plausibility check **immediately** (a second Gemini call passing the result):
+**Auto-approve flow:** after a successful translation call, run the plausibility check **immediately** (a second LLM call passing the result):
 - Plausibility **YES** → status `auto-approved` → write card into Anki sync server.
 - Plausibility **UNCLEAR** or **NO** → status `needs-review` → waits in the review queue for a manual decision.
 
@@ -201,12 +201,12 @@ Auth piggybacks on the Authentik cookie on `.example.com` (`credentials: "includ
   - PWA of vocab-api (`/` as a homescreen app).
 - **Android:** AnkiDroid + PWA share target.
 
-### 3.6 Translator (Gemini Flash-Lite)
+### 3.6 Translator (LLM gateway)
 
-- **Provider:** Google Gemini API.
-- **Model:** `gemini-2.5-flash-lite`.
-- **Key:** API key arrives via vault secret as env var (`VOCAB_GEMINI_API_KEY`); nothing in the repo.
-- **Call:** vocab-api hits `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent` directly.
+- **Endpoint:** the house LLM gateway (LiteLLM, ansible-home#641), spoken to with the official `anthropic` SDK over the Messages API (`/v1/messages`).
+- **Model:** none named here. vocab asks for the task aliases `vocab-translate`, `vocab-plausibility` and `vocab-example`; the gateway maps each to a model and can switch it at runtime.
+- **Key:** vocab's own gateway key arrives via vault secret as env var (`VOCAB_LLM_API_KEY`); nothing in the repo.
+- **Output:** translate and invent-example use structured outputs (`messages.parse` with the Pydantic models), so the JSON always matches the schema.
 
 **Single-call JSON output:**
 
@@ -219,11 +219,11 @@ Auth piggybacks on the Authentik cookie on `.example.com` (`credentials: "includ
 }
 ```
 
-**Plausibility check:** a second Gemini call passing the translation output. Reply YES/NO/UNCLEAR. UNCLEAR/NO → `needs-review`.
+**Plausibility check:** a second LLM call passing the translation output. Reply YES/NO/UNCLEAR. UNCLEAR/NO → `needs-review`.
 
 **Cache:** `translation_cache` table. Identical `(word, sentence_hash, lang)` pairs → no duplicate call. Cross-user.
 
-**Throttle:** 1 req/s in the background worker, comfortably below free-tier limits.
+**Throttle:** 1 req/s in the background worker. The gateway enforces vocab's monthly budget.
 
 ### 3.7 Audio (TTS via edge-tts)
 
@@ -273,7 +273,7 @@ github.com/andicoder/vocab/
 │   ├── deps.py             # FastAPI dependency wrappers
 │   ├── operations.py       # Approve/reject/import helpers shared by JSON + htmx routes
 │   ├── worker.py           # process_entry pipeline + background worker loop
-│   ├── gemini.py           # Gemini wrapper + translation cache
+│   ├── llm.py              # LLM gateway client + translation cache
 │   ├── audio.py            # edge-tts + storage protocol (S3 / local dir)
 │   ├── anki_writer.py      # Per-user collection.anki2 write + media copy
 │   ├── kindle.py           # vocab.db parser (latest lookup per word)
@@ -304,7 +304,7 @@ Image tagging: `ghcr.io/andicoder/vocab-api:1.2.3` (semver), plus floating `:lat
 
 | Topic | Decision |
 |-------|----------|
-| **Translator** | Gemini Flash-Lite (single JSON call + plausibility check) |
+| **Translator** | LLM gateway, task aliases (single structured-output call + plausibility check) |
 | **TTS** | edge-tts → S3 (Hetzner) or local dir, swappable behind a Protocol |
 | **Anki sync** | official `python -m anki.syncserver` in-cluster, replaces AnkiWeb |
 | **iOS review** | AnkiMobile (€30 one-off, Apple Family Sharing for everyone) |
@@ -321,7 +321,7 @@ Image tagging: `ghcr.io/andicoder/vocab-api:1.2.3` (semver), plus floating `:lat
 
 ## 6. Risks / open items
 
-- **Gemini free-tier change** — fallback Azure Translator (2M chars/month free permanently).
+- **LLM provider change** — handled in the gateway: it remaps vocab's task aliases, vocab is unchanged.
 - **edge-tts is reverse-engineered** — fallback Google Cloud TTS or local Piper.
 - **SQLite concurrency** between vocab-api and anki-sync-server (see §3.8) — mitigated via WAL + an HTTP bridge if needed.
 - **Authentik forward-auth + WebExtension:** cookie-based auth requires `SameSite=None; Secure` for cross-origin calls from arbitrary websites.
@@ -336,7 +336,7 @@ Image tagging: `ghcr.io/andicoder/vocab-api:1.2.3` (semver), plus floating `:lat
 - Anki official sync server: https://docs.ankiweb.net/sync-server.html
 - Anki Python package: https://pypi.org/project/anki/
 - AnkiConnect API: https://foosoft.net/projects/anki-connect/
-- Gemini API: https://ai.google.dev/api
+- Anthropic Messages API: https://platform.claude.com/docs/en/api/messages
 - edge-tts: https://pypi.org/project/edge-tts/
 - htmx: https://htmx.org/
 - WebExtensions MV3: https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Manifest_V3

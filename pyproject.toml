@@ -17,7 +17,9 @@ dependencies = [
     "alembic>=1.14",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
-    "httpx>=0.28",
+    # 2.x sends the key as `Authorization: Bearer`, which the LLM gateway
+    # (LiteLLM) accepts.
+    "anthropic>=2.3,<3",
     # 7.3 tracks the Edge version Microsoft's endpoint now expects; 7.2.x
     # gets a 403 on the websocket handshake.
     "edge-tts>=7.3.1",
@@ -41,6 +43,10 @@ dev = [
     "pytest-asyncio>=0.24",
     "ruff>=0.8",
     "mypy>=1.13",
+    "httpx>=0.28",
+    # The anthropic SDK runs on httpx2, so the fake gateway in the tests
+    # has to be an httpx2 transport.
+    "httpx2>=2.0",
 ]
 
 [tool.setuptools.packages.find]

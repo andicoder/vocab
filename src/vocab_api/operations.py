@@ -11,15 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from .anki_writer import AnkiBackend, CardDirection, VocabCardContent
 from .audio import AudioRequest, AudioStorage, TtsClient, audio_key, synthesize_with_cache
 from .cloze import mask_word_in_sentence, populate_cloze
-from .gemini import (
-    GeminiClient,
+from .kindle import parse_kindle_vocab
+from .llm import (
+    LlmClient,
     TranslationRequest,
     TranslationResult,
     join_collocations,
     join_extra_examples,
     translate_with_cache,
 )
-from .kindle import parse_kindle_vocab
 from .models import Entry, User
 
 
@@ -34,7 +34,7 @@ class ApprovePayload(BaseModel):
 class ApprovalDeps:
     """Collaborators needed to finalize an entry into an Anki card.
 
-    `gemini` + `cache_session_factory` only fire inside `apply_approve` to
+    `llm` + `cache_session_factory` only fire inside `apply_approve` to
     backfill worker-only fields (cloze_sentence per #57; extra_examples,
     collocations, sense_label per #58; alt_* per #60) on legacy entries
     that landed in `needs-review` before the worker populated them. Fresh
@@ -47,7 +47,7 @@ class ApprovalDeps:
 
     storage: AudioStorage
     anki_writer: AnkiBackend
-    gemini: GeminiClient
+    llm: LlmClient
     tts: TtsClient
     cache_session_factory: async_sessionmaker[AsyncSession]
     voice: str
@@ -163,7 +163,7 @@ async def apply_approve(
         raise HTTPException(status_code=400, detail="entry not yet translated")
 
     if not entry.cloze_sentence:
-        await populate_cloze(entry, gemini=deps.gemini, lemma=entry.lemma)
+        await populate_cloze(entry, llm=deps.llm, lemma=entry.lemma)
 
     await _backfill_worker_fields(session=session, entry=entry, deps=deps)
 
@@ -183,14 +183,14 @@ async def _backfill_worker_fields(
     field at once (#58, #60).
 
     The cache hit path is cheap for any word the worker has already seen —
-    a miss falls through to one Gemini call. Fresh entries arrive here
+    a miss falls through to one LLM call. Fresh entries arrive here
     with `alt_priority` set and short-circuit before the lookup."""
     if entry.alt_priority is not None:
         return
     tr = await translate_with_cache(
         session=session,
         cache_session_factory=deps.cache_session_factory,
-        gemini=deps.gemini,
+        llm=deps.llm,
         request=TranslationRequest(word=entry.word, sentence=entry.sentence, lang=entry.lang),
     )
     _backfill_translation_fields(entry, tr)

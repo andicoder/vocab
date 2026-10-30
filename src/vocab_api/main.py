@@ -2,7 +2,6 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
-import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -14,7 +13,7 @@ from .anki_writer import AnkiBackend, AnkiWriter
 from .audio import EdgeTtsClient, make_storage_from_settings
 from .config import settings
 from .db import SessionLocal
-from .gemini import GeminiClient
+from .llm import LlmClient
 from .logging_config import configure_logging
 from .mcp_server import configure_mcp
 from .mcp_server import mcp as _mcp
@@ -44,19 +43,13 @@ def _make_anki_backend() -> AnkiBackend:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    http_client = httpx.AsyncClient(timeout=settings.gemini_timeout_s)
-    gemini = GeminiClient(
-        http=http_client,
-        api_key=settings.gemini_api_key,
-        model=settings.gemini_model,
-        base_url=settings.gemini_base_url,
-    )
+    llm = LlmClient.from_settings(settings)
     tts = EdgeTtsClient()
     storage = make_storage_from_settings()
     anki_writer: AnkiBackend = _make_anki_backend()
 
     deps = WorkerDeps(
-        gemini=gemini,
+        llm=llm,
         tts=tts,
         storage=storage,
         anki_writer=anki_writer,
@@ -81,11 +74,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         async with AsyncExitStack() as stack:
             await stack.enter_async_context(_mcp.session_manager.run())
-            if settings.gemini_api_key:
+            if settings.llm_api_key:
                 await stack.enter_async_context(run_worker(session_factory=SessionLocal, deps=deps))
             yield
     finally:
-        await http_client.aclose()
+        await llm.aclose()
 
 
 app = FastAPI(title="vocab-api", version=__version__, lifespan=lifespan)
