@@ -26,3 +26,9 @@ var/
 .vscode/
 *.swp
 .DS_Store
+
+# Kindle vocabulary DB — personal reading history, never commit (public repo)
+vocab.db
+*vocab*.db
+# …except the anonymised example the smoke script reads by default (#93)
+!tests/fixtures/kindle_vocab.db
