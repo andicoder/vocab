@@ -2,14 +2,15 @@
 
 Per the CLAUDE.md discipline rule "Prompt and worker-routing changes
 require a real import run before merge": picks a curated set of words
-from a Kindle vocab.db, runs them through `translate_with_cache` plus
+from a Kindle vocab.db (by default the anonymised example in
+tests/fixtures, #93), runs them through `translate_with_cache` plus
 a plausibility check, and prints what came back so the operator can
 eyeball regressions in alt-classification, lemma resolution, or
 plausibility verdicts.
 
 Usage:
-    .venv/bin/python scripts/smoke_translate.py path/to/vocab.db
-    .venv/bin/python scripts/smoke_translate.py vocab.db --words toward,beneath
+    .venv/bin/python scripts/smoke_translate.py
+    .venv/bin/python scripts/smoke_translate.py path/to/vocab.db --words toward,beneath
 
 Cache rows for the target words are cleared first so prompt edits are
 actually exercised, not the previously cached translation. Needs a
@@ -61,6 +62,7 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "meticulously",  # baseline literary — expect alt_priority=none
 )
 
+_EXAMPLE_DB = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "kindle_vocab.db"
 _HTTP_TIMEOUT_S = 60.0
 _MAX_RETRIES = 3
 
@@ -182,7 +184,13 @@ async def _run(kindle_db: Path, words: tuple[str, ...]) -> int:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kindle_db", type=Path, help="Path to a Kindle vocab.db")
+    parser.add_argument(
+        "kindle_db",
+        type=Path,
+        nargs="?",
+        default=_EXAMPLE_DB,
+        help="Path to a Kindle vocab.db (default: the anonymised example in tests/fixtures)",
+    )
     parser.add_argument(
         "--words",
         type=lambda s: tuple(w.strip() for w in s.split(",") if w.strip()),
