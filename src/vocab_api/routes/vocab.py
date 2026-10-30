@@ -10,12 +10,12 @@ from ..config import settings
 from ..db import get_session
 from ..deps import (
     get_anki_writer,
-    get_gemini,
+    get_llm,
     get_session_factory,
     get_storage,
     get_tts,
 )
-from ..gemini import GeminiClient
+from ..llm import LlmClient
 from ..models import Entry, User
 from ..operations import ApprovalDeps, ApprovePayload
 from ..schemas import EntryCreate, EntryRead
@@ -36,14 +36,14 @@ async def create_entry(
     payload: EntryCreate,
     user: Annotated[User, Depends(current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-    gemini: Annotated[GeminiClient, Depends(get_gemini)],
+    llm: Annotated[LlmClient, Depends(get_llm)],
     tts: Annotated[TtsClient, Depends(get_tts)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
     anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
     session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
 ) -> Entry:
     deps = WorkerDeps(
-        gemini=gemini,
+        llm=llm,
         tts=tts,
         storage=storage,
         anki_writer=anki_writer,
@@ -55,7 +55,7 @@ async def create_entry(
         user=user,
         payload=payload,
         deps=deps,
-        timeout=settings.gemini_timeout_s,
+        timeout=settings.llm_timeout_s,
     )
 
 
@@ -77,14 +77,14 @@ async def approve_entry_route(
     session: Annotated[AsyncSession, Depends(get_session)],
     storage: Annotated[AudioStorage, Depends(get_storage)],
     anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
-    gemini: Annotated[GeminiClient, Depends(get_gemini)],
+    llm: Annotated[LlmClient, Depends(get_llm)],
     tts: Annotated[TtsClient, Depends(get_tts)],
     session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
 ) -> Entry:
     deps = ApprovalDeps(
         storage=storage,
         anki_writer=anki_writer,
-        gemini=gemini,
+        llm=llm,
         tts=tts,
         cache_session_factory=session_factory,
         voice=settings.audio_voice,

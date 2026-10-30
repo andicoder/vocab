@@ -74,14 +74,14 @@ class Entry(Base):
     )
     sense_label: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 2–4 typical collocations the lemma appears in (#27). Stored " · "-joined
-    # so the Anki template can render it directly; NULL when Gemini returns
+    # so the Anki template can render it directly; NULL when the model returns
     # an empty list (function words, adverbs).
     collocations: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 1–2 extra example sentences in a context different from the source
     # sentence (#26). Stored `<br>`-joined so Anki renders each one on its
-    # own line; NULL when Gemini couldn't think of a different context.
+    # own line; NULL when the model couldn't think of a different context.
     extra_examples: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Idiomatic alternative (#60): when Gemini flags the encountered lemma as
+    # Idiomatic alternative (#60): when the model flags the encountered lemma as
     # dated/formal/regional and a more common word fits, the alt_* columns
     # carry everything the card needs to render — translation, IPA, example
     # sentences (joined like extra_examples) and the alt audio URL.

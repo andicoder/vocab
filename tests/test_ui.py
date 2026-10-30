@@ -6,11 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from tests.test_routes import stub_translation_gemini
+from tests.test_routes import stub_translation_llm
 from vocab_api.anki_writer import AnkiWriter
 from vocab_api.audio import LocalDirAudioStorage
 from vocab_api.db import engine
-from vocab_api.deps import get_anki_writer, get_gemini, get_storage, get_tts
+from vocab_api.deps import get_anki_writer, get_llm, get_storage, get_tts
 from vocab_api.main import app
 
 
@@ -73,7 +73,7 @@ def test_htmx_create_entry_renders_exists_toast_when_lemma_already_present(
     from vocab_api import worker
     from vocab_api.config import settings
 
-    monkeypatch.setattr(settings, "gemini_api_key", "fake-key")
+    monkeypatch.setattr(settings, "llm_api_key", "fake-key")
 
     async def fake_process_entry(*, session, entry, user, deps):
         await session.delete(entry)
@@ -99,14 +99,14 @@ def test_htmx_create_entry_keeps_entry_pending_when_tts_fails(
     # (edge-tts 403) must leave the raw entry for the worker, not lose it.
     from vocab_api.config import settings
 
-    monkeypatch.setattr(settings, "gemini_api_key", "fake-key")
+    monkeypatch.setattr(settings, "llm_api_key", "fake-key")
 
     class BrokenTts:
         async def synthesize(self, *, text: str, voice: str) -> bytes:
             raise RuntimeError("403, message='Invalid response status'")
 
     storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
-    app.dependency_overrides[get_gemini] = stub_translation_gemini
+    app.dependency_overrides[get_llm] = stub_translation_llm
     app.dependency_overrides[get_tts] = lambda: BrokenTts()
     app.dependency_overrides[get_storage] = lambda: storage
 
@@ -151,7 +151,7 @@ def test_htmx_approve_writes_anki_and_clears_row(http_client: TestClient, tmp_pa
     anki_writer = AnkiWriter(root=tmp_path / "anki")
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_anki_writer] = lambda: anki_writer
-    app.dependency_overrides[get_gemini] = stub_translation_gemini
+    app.dependency_overrides[get_llm] = stub_translation_llm
 
     create = http_client.post(
         "/vocab",

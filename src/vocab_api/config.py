@@ -9,10 +9,10 @@ class Settings(BaseSettings):
     auth_user_header: str = "x-authentik-username"
     cors_origins: list[str] = []
 
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash-lite"
-    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
-    gemini_timeout_s: float = 10.0
+    # The LLM gateway (ansible-home#641) and vocab's own key there.
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_timeout_s: float = 10.0
 
     s3_endpoint_url: str = ""
     s3_region: str = "fsn1"

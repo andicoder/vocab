@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from .anki_writer import AnkiBackend
 from .audio import AudioRequest, AudioStorage, TtsClient, synthesize_with_cache
 from .cloze import populate_cloze
-from .gemini import (
-    GeminiClient,
+from .llm import (
+    LlmClient,
     TranslationRequest,
     TranslationResult,
     join_collocations,
@@ -51,7 +51,7 @@ class WorkerDeps:
     lets translation and audio caches commit independently of the entry
     transaction (see #6)."""
 
-    gemini: GeminiClient
+    llm: LlmClient
     tts: TtsClient
     storage: AudioStorage
     anki_writer: AnkiBackend
@@ -74,7 +74,7 @@ async def process_entry(
     translation = await translate_with_cache(
         session=session,
         cache_session_factory=deps.cache_session_factory,
-        gemini=deps.gemini,
+        llm=deps.llm,
         request=TranslationRequest(word=entry.word, sentence=entry.sentence, lang=entry.lang),
     )
 
@@ -107,7 +107,7 @@ async def process_entry(
     # Kiesel`) triggers spurious UNCLEAR/NO verdicts for any non-base form
     # (#62). Every downstream field on the card is keyed off `lemma`, so
     # plausibility being lemma-keyed too keeps the contract consistent.
-    verdict = await deps.gemini.plausibility(
+    verdict = await deps.llm.plausibility(
         word=translation.lemma, sentence=entry.sentence, translation=translation
     )
     audio_url = await synthesize_with_cache(
@@ -119,7 +119,7 @@ async def process_entry(
     )
     # Synthesize the alt-lemma audio in the same flow so the card already
     # has both pronunciation cues when it lands. Skipped for the common
-    # case where Gemini reports no idiomatic alternative.
+    # case where the model reports no idiomatic alternative.
     alt_audio_url: str | None = None
     if translation.alt_lemma:
         alt_audio_url = await synthesize_with_cache(
@@ -129,7 +129,7 @@ async def process_entry(
             storage=deps.storage,
             request=AudioRequest(word=translation.alt_lemma, voice=deps.voice, lang=entry.lang),
         )
-    await populate_cloze(entry, gemini=deps.gemini, lemma=translation.lemma)
+    await populate_cloze(entry, llm=deps.llm, lemma=translation.lemma)
     _populate_entry_from_translation(
         entry, translation, audio_url=audio_url, alt_audio_url=alt_audio_url
     )
@@ -145,7 +145,7 @@ async def process_entry(
             deps=ApprovalDeps(
                 storage=deps.storage,
                 anki_writer=deps.anki_writer,
-                gemini=deps.gemini,
+                llm=deps.llm,
                 tts=deps.tts,
                 cache_session_factory=deps.cache_session_factory,
                 voice=deps.voice,

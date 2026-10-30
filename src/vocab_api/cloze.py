@@ -1,7 +1,7 @@
 import logging
 import re
 
-from .gemini import GeminiClient
+from .llm import LlmClient
 from .models import Entry
 
 log = logging.getLogger(__name__)
@@ -17,12 +17,12 @@ def mask_word_in_sentence(*, word: str, sentence: str) -> str | None:
     return pattern.sub("___", sentence, count=1)
 
 
-async def populate_cloze(entry: Entry, *, gemini: GeminiClient, lemma: str) -> None:
+async def populate_cloze(entry: Entry, *, llm: LlmClient, lemma: str) -> None:
     """Fill `entry.cloze_sentence` (and `entry.sentence` if it was empty).
 
     Prefers the deterministic path: mask the user-submitted surface form
     (entry.word) inside the user-submitted source sentence. Falls back to
-    a Gemini-invented example only when there is no source sentence at all
+    an LLM-invented example only when there is no source sentence at all
     or when the surface form does not appear in the source sentence
     (a rare edge case worth a warning)."""
     if entry.sentence:
@@ -36,6 +36,6 @@ async def populate_cloze(entry: Entry, *, gemini: GeminiClient, lemma: str) -> N
             entry.word,
         )
 
-    invented = await gemini.invent_example(lemma=lemma)
+    invented = await llm.invent_example(lemma=lemma)
     entry.sentence = invented.sentence
     entry.cloze_sentence = invented.cloze_sentence

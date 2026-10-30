@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .anki_writer import AnkiBackend
-from .gemini import GeminiClient, TranslationResult
+from .llm import LlmClient, TranslationResult
 from .models import Entry, User
 from .operations import (
     ApprovalDeps,
@@ -89,11 +89,11 @@ async def reject_entry(
 
 async def translate_word(
     *,
-    gemini: GeminiClient,
+    llm: LlmClient,
     word: str,
     sentence: str | None = None,
 ) -> TranslationResult:
-    return await gemini.translate(word=word, sentence=sentence)
+    return await llm.translate(word=word, sentence=sentence)
 
 
 async def rotate_cloze_sentences(
