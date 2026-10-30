@@ -76,8 +76,10 @@ def test_htmx_create_entry_renders_exists_toast_when_lemma_already_present(
     monkeypatch.setattr(settings, "gemini_api_key", "fake-key")
 
     async def fake_process_entry(*, session, entry, user, deps):
+        from vocab_api.models import Entry
+
         await session.delete(entry)
-        return "dozen"
+        return Entry(user_id=entry.user_id, word="dozen", lemma="dozen", lang="en")
 
     monkeypatch.setattr(worker, "process_entry", fake_process_entry)
 

@@ -58,6 +58,16 @@ class TranslationResult(BaseModel):
     alt_ipa: str = ""
     alt_examples: list[str] = []
     alt_priority: str = ""
+    # Exercise-card payload: material for the rotating "Übung" card.
+    # Defaults keep older mocks and pre-existing cache rows compatible;
+    # `definition_en` doubles as the freshness signal for this generation
+    # of cache rows (see `_cache_row_is_fresh`).
+    mc_distractors: list[str] = []
+    synonym: str = ""
+    antonym: str = ""
+    production_prompt: str = ""
+    production_solution: str = ""
+    definition_en: str = ""
 
 
 class InventedExample(BaseModel):
@@ -143,6 +153,29 @@ of the English word in context, then return JSON:
     words each, JSON list of strings). The learner needs to see the
     alternative in context; the user's original sentence still contains the
     original lemma. Empty list when alt_priority is "none".
+- mc_distractors: exactly 3 German multiple-choice distractors as a JSON list.
+    Each must be a plausible but clearly wrong translation of the lemma in
+    this sense — same part of speech and same shape rules as `translation`
+    (article for nouns, infinitive for verbs). Prefer semantically nearby or
+    similar-sounding words a learner might confuse (e.g. for "expedition" →
+    ["die Ausstellung", "die Auslieferung", "der Ausflug"]). Never include
+    the correct translation or one of `alternatives`.
+- synonym: one common English synonym of the lemma in this sense, optionally
+    followed by a short German nuance hint in parentheses (e.g.
+    "journey (weniger organisiert)"). Empty string when no reasonable
+    synonym exists.
+- antonym: one common English antonym of the lemma in this sense, same format
+    as `synonym`. Empty string when no reasonable antonym exists (most nouns).
+- production_prompt: one German sentence describing a concrete everyday
+    situation in which the learner should produce an English sentence using
+    the lemma (e.g. "Du erzählst von einer Forschungsreise in die Arktis.").
+    Do not mention the German translation of the lemma in it.
+- production_solution: a natural English model sentence (≤ 15 words) that
+    answers `production_prompt` and uses the lemma or an inflection of it.
+- definition_en: one plain-English dictionary definition of the lemma in this
+    sense (one sentence, ≤ 20 words), written WITHOUT using the lemma or any
+    derived form of it — the learner has to recall the word from the
+    definition alone.
 
 Word: {word}
 {sentence_block}
@@ -269,7 +302,9 @@ def _cache_row_is_fresh() -> ColumnElement[bool]:
     `extra_examples` populated (#43 — migrations 42b43fa4406f /
     a4eb60988a1a backfilled pre-existing rows with `''`) AND a non-empty
     `alt_priority` (#60 — the post-idiomaticity worker always emits one
-    of {'preferred','minor','none'}, so `''` reliably flags a pre-#60 row).
+    of {'preferred','minor','none'}, so `''` reliably flags a pre-#60 row)
+    AND a non-empty `definition_en` (the prompt always demands a
+    definition, so `''` reliably flags a row without exercise fields).
     Used both as the WHERE filter on the cache SELECT and — negated — as
     the WHERE on the upsert's DO UPDATE, so a stale row gets refreshed in
     place while a fresh row that lost the UNIQUE race against a concurrent
@@ -280,6 +315,7 @@ def _cache_row_is_fresh() -> ColumnElement[bool]:
     return and_(
         ~((TranslationCache.collocations == "") & (TranslationCache.extra_examples == "")),
         TranslationCache.alt_priority != "",
+        TranslationCache.definition_en != "",
     )
 
 
@@ -386,6 +422,12 @@ async def translate_with_cache(
                 alt_ipa=cached.alt_ipa,
                 alt_examples=split_extra_examples(cached.alt_examples),
                 alt_priority=cached.alt_priority,
+                mc_distractors=split_collocations(cached.mc_distractors),
+                synonym=cached.synonym,
+                antonym=cached.antonym,
+                production_prompt=cached.production_prompt,
+                production_solution=cached.production_solution,
+                definition_en=cached.definition_en,
             )
         )
 
@@ -410,6 +452,12 @@ async def translate_with_cache(
         "alt_ipa": result.alt_ipa,
         "alt_examples": join_extra_examples(result.alt_examples),
         "alt_priority": result.alt_priority,
+        "mc_distractors": join_collocations(result.mc_distractors),
+        "synonym": result.synonym,
+        "antonym": result.antonym,
+        "production_prompt": result.production_prompt,
+        "production_solution": result.production_solution,
+        "definition_en": result.definition_en,
     }
     insert_stmt = pg_insert(TranslationCache).values(**values)
     refresh_cols = {

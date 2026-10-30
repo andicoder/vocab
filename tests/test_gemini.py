@@ -215,6 +215,106 @@ async def test_translate_prompt_asks_for_extra_examples_in_other_contexts():
     assert "different" in prompt.lower() or "other context" in prompt.lower()
 
 
+async def test_translate_returns_exercise_fields():
+    payload = json.dumps(
+        {
+            "lemma": "expedition",
+            "translation": "die Expedition",
+            "alternatives": "",
+            "ipa": "",
+            "mc_distractors": ["die Ausstellung", "die Auslieferung", "die Ausschreitung"],
+            "synonym": "journey (weniger organisiert)",
+            "antonym": "homecoming",
+            "production_prompt": "Du erzählst von einer Forschungsreise in die Arktis.",
+            "production_solution": "The expedition reached the Arctic after three weeks.",
+            "definition_en": "An organized journey undertaken for a specific purpose.",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    client, http = _make_client(handler)
+    try:
+        result = await client.translate(word="expedition", sentence=None)
+    finally:
+        await http.aclose()
+
+    assert result.mc_distractors == [
+        "die Ausstellung",
+        "die Auslieferung",
+        "die Ausschreitung",
+    ]
+    assert result.synonym == "journey (weniger organisiert)"
+    assert result.antonym == "homecoming"
+    assert result.production_prompt == "Du erzählst von einer Forschungsreise in die Arktis."
+    assert result.production_solution == "The expedition reached the Arctic after three weeks."
+    assert result.definition_en == "An organized journey undertaken for a specific purpose."
+
+
+async def test_translate_defaults_exercise_fields_when_omitted():
+    payload = json.dumps(
+        {
+            "lemma": "x",
+            "translation": "y",
+            "alternatives": "",
+            "ipa": "",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_gemini_response(payload))
+
+    client, http = _make_client(handler)
+    try:
+        result = await client.translate(word="x", sentence=None)
+    finally:
+        await http.aclose()
+
+    assert result.mc_distractors == []
+    assert result.synonym == ""
+    assert result.antonym == ""
+    assert result.production_prompt == ""
+    assert result.production_solution == ""
+    assert result.definition_en == ""
+
+
+async def test_translate_prompt_asks_for_exercise_fields():
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json=_gemini_response(
+                json.dumps({"lemma": "x", "translation": "y", "alternatives": "", "ipa": ""})
+            ),
+        )
+
+    client, http = _make_client(handler)
+    try:
+        await client.translate(word="x", sentence=None)
+    finally:
+        await http.aclose()
+
+    prompt = captured["body"]["contents"][0]["parts"][0]["text"]
+    for key in (
+        "mc_distractors",
+        "synonym",
+        "antonym",
+        "production_prompt",
+        "production_solution",
+        "definition_en",
+    ):
+        assert key in prompt
+    # Distractors must be plausible-but-wrong German translations, not random
+    # nouns — the prompt has to say so explicitly.
+    assert "wrong" in prompt.lower() or "incorrect" in prompt.lower()
+    # The definition must not contain the lemma itself, or the exercise card
+    # gives away its own answer.
+    assert "do not use the lemma" in prompt.lower() or "without using the lemma" in prompt.lower()
+
+
 async def test_translate_prompt_asks_for_sense_key_and_label():
     captured: dict = {}
 

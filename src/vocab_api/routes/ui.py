@@ -172,7 +172,7 @@ async def htmx_create_entry(
     session.add(entry)
     await session.flush()
 
-    duplicate_of: str | None = None
+    duplicate_of: Entry | None = None
     if settings.gemini_api_key:
         deps = WorkerDeps(
             gemini=gemini,
@@ -192,7 +192,7 @@ async def htmx_create_entry(
         return _render(
             request,
             "partials/exists_toast.html",
-            {"word": word, "lemma": duplicate_of},
+            {"word": word, "lemma": duplicate_of.lemma},
         )
 
     await session.refresh(entry)

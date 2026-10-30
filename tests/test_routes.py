@@ -123,6 +123,12 @@ def test_translate_route_returns_translation(http_client: TestClient):
         "alt_ipa": "",
         "alt_examples": [],
         "alt_priority": "none",
+        "mc_distractors": ["die Ausstellung", "die Auslieferung", "der Ausflug"],
+        "synonym": "journey (weniger organisiert)",
+        "antonym": "",
+        "production_prompt": "Du erzählst von einer Forschungsreise.",
+        "production_solution": "The expedition reached the Arctic.",
+        "definition_en": "An organized journey undertaken for a specific purpose.",
     }
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -346,11 +352,12 @@ def test_approve_backfills_extra_fields_from_translation_cache(
                     "INSERT INTO vocab.translation_cache"
                     " (word, sentence_hash, lang, lemma, translation,"
                     "  alternatives, ipa, sense_key, sense_label,"
-                    "  collocations, extra_examples, alt_priority)"
+                    "  collocations, extra_examples, alt_priority, definition_en)"
                     " VALUES ('expedition', :sh, 'en', 'expedition',"
                     " 'die Expedition', '', '', 'noun-journey', 'Reise',"
                     " 'go on an expedition · Arctic expedition',"
-                    " 'The Arctic expedition lasted three months.', 'none')"
+                    " 'The Arctic expedition lasted three months.', 'none',"
+                    " 'An organized journey undertaken for a specific purpose.')"
                 ),
                 {"sh": sh},
             )
@@ -373,6 +380,93 @@ def test_approve_backfills_extra_fields_from_translation_cache(
         assert note["SenseLabel"] == "Reise"
     finally:
         col.close()
+
+
+def test_approve_backfills_exercise_fields_from_translation_cache(
+    http_client: TestClient, tmp_path: Path
+):
+    # Equivalence-class sibling of the #58/#60 backfills: entries written by
+    # the pre-exercise worker have alt_priority set but no exercise payload.
+    # Approving them must backfill from translate_with_cache even though the
+    # alt_priority marker alone would say "already complete".
+    storage = LocalDirAudioStorage(root=tmp_path / "audio", public_url_base="/audio")
+    anki_writer = AnkiWriter(root=tmp_path / "anki")
+    app.dependency_overrides[get_storage] = lambda: storage
+    app.dependency_overrides[get_anki_writer] = lambda: anki_writer
+
+    create = http_client.post(
+        "/vocab",
+        json={"word": "expedition", "sentence": "A grand expedition north."},
+        headers={"X-authentik-username": "alice"},
+    )
+    assert create.status_code == 201
+    entry_id = create.json()["id"]
+
+    from vocab_api.gemini import _sentence_hash  # noqa: PLC0415 — local helper, test-only use
+
+    sh = _sentence_hash("A grand expedition north.")
+    assert sh is not None
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE vocab.entry SET status='needs-review',"
+                    " cloze_sentence='A grand ___ north.',"
+                    " extra_examples='legacy', collocations='legacy',"
+                    " sense_label='legacy', alt_priority='none',"
+                    " mc_distractors=NULL, synonym=NULL, antonym=NULL,"
+                    " production_prompt=NULL, production_solution=NULL,"
+                    " definition_en=NULL"
+                    f" WHERE id = {entry_id}"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.translation_cache"
+                    " (word, sentence_hash, lang, lemma, translation,"
+                    "  alternatives, ipa, sense_key, sense_label,"
+                    "  collocations, extra_examples, alt_priority,"
+                    "  mc_distractors, synonym, antonym,"
+                    "  production_prompt, production_solution, definition_en)"
+                    " VALUES ('expedition', :sh, 'en', 'expedition',"
+                    " 'die Expedition', '', '', 'noun-journey', 'Reise',"
+                    " 'go on an expedition', 'The expedition lasted months.', 'none',"
+                    " 'die Ausstellung · die Auslieferung · der Ausflug',"
+                    " 'journey (weniger organisiert)', '',"
+                    " 'Du erzählst von einer Forschungsreise.',"
+                    " 'The expedition reached the Arctic.',"
+                    " 'An organized journey undertaken for a specific purpose.')"
+                ),
+                {"sh": sh},
+            )
+
+    asyncio.run(_seed())
+
+    response = http_client.post(
+        f"/vocab/{entry_id}/approve",
+        json={"lemma": "expedition", "translation": "die Expedition"},
+        headers={"X-authentik-username": "alice"},
+    )
+    assert response.status_code == 200, response.text
+
+    async def _fetch() -> dict:
+        async with engine.begin() as conn:
+            row = await conn.execute(
+                text(
+                    "SELECT mc_distractors, synonym, antonym, production_prompt,"
+                    f" production_solution, definition_en FROM vocab.entry WHERE id = {entry_id}"
+                )
+            )
+            return dict(row.mappings().one())
+
+    fields = asyncio.run(_fetch())
+    assert fields["mc_distractors"] == "die Ausstellung · die Auslieferung · der Ausflug"
+    assert fields["synonym"] == "journey (weniger organisiert)"
+    assert fields["antonym"] is None
+    assert fields["production_prompt"] == "Du erzählst von einer Forschungsreise."
+    assert fields["production_solution"] == "The expedition reached the Arctic."
+    assert fields["definition_en"] == "An organized journey undertaken for a specific purpose."
 
 
 def test_approve_backfills_alt_fields_from_translation_cache(
@@ -419,12 +513,13 @@ def test_approve_backfills_alt_fields_from_translation_cache(
                     "  alternatives, ipa, sense_key, sense_label,"
                     "  collocations, extra_examples,"
                     "  alt_lemma, alt_reason, alt_translation, alt_ipa,"
-                    "  alt_examples, alt_priority)"
+                    "  alt_examples, alt_priority, definition_en)"
                     " VALUES ('weary', :sh, 'en', 'weary', 'müde',"
                     " '', '', 'adj-tired', 'müde',"
                     " 'go weary', 'I grow weary of this.',"
                     " 'exhausted', 'dated', 'erschöpft', '/ɪɡˈzɔːstɪd/',"
-                    " 'She was exhausted after the hike.', 'preferred')"
+                    " 'She was exhausted after the hike.', 'preferred',"
+                    " 'Feeling extremely tired after effort.')"
                 ),
                 {"sh": sh},
             )
@@ -500,11 +595,17 @@ class _FakeAnkiWithUpdate:
     async def write_card(self, *, username: str, **kwargs) -> int:
         return 42
 
-    async def update_card(self, *, username: str, card_id: int, cloze_sentence: str) -> None:
+    async def update_card(self, *, username: str, card_id: int, fields) -> None:
         if card_id == self.fail_on_card_id:
             raise RuntimeError("anki update failed")
         self.updates.append(
-            {"username": username, "card_id": card_id, "cloze_sentence": cloze_sentence}
+            {
+                "username": username,
+                "card_id": card_id,
+                "cloze_sentence": fields.cloze_sentence,
+                "exercise_front": fields.exercise_front,
+                "exercise_back": fields.exercise_back,
+            }
         )
 
 

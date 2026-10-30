@@ -21,10 +21,10 @@ def _gemini_response(text: str) -> dict:
 def _payload(translation: str = "die Expedition") -> str:
     # The cache reader skips rows where both collocations and extra_examples
     # are empty (#43 — stale rows from migration defaults) OR where
-    # alt_priority is empty (#60 — pre-idiomaticity rows). Tests that rely
-    # on cache *hits* therefore have to return at least one of the two
-    # collocation/extras and a non-empty alt_priority from the mock so the
-    # row counts as fresh.
+    # alt_priority is empty (#60 — pre-idiomaticity rows) OR where
+    # definition_en is empty (pre-exercise-fields rows). Tests that rely
+    # on cache *hits* therefore have to return all three freshness signals
+    # from the mock so the row counts as fresh.
     return json.dumps(
         {
             "lemma": "expedition",
@@ -34,6 +34,12 @@ def _payload(translation: str = "die Expedition") -> str:
             "collocations": ["go on an expedition"],
             "extra_examples": ["She joined an expedition to the Amazon."],
             "alt_priority": "none",
+            "mc_distractors": ["die Ausstellung", "die Auslieferung", "der Ausflug"],
+            "synonym": "journey (weniger organisiert)",
+            "antonym": "",
+            "production_prompt": "Du erzählst von einer Forschungsreise.",
+            "production_solution": "The expedition reached the Arctic.",
+            "definition_en": "An organized journey undertaken for a specific purpose.",
         }
     )
 
@@ -80,6 +86,12 @@ async def test_cache_miss_calls_gemini_and_stores(db_session: AsyncSession):
         collocations=["go on an expedition"],
         extra_examples=["She joined an expedition to the Amazon."],
         alt_priority="none",
+        mc_distractors=["die Ausstellung", "die Auslieferung", "der Ausflug"],
+        synonym="journey (weniger organisiert)",
+        antonym="",
+        production_prompt="Du erzählst von einer Forschungsreise.",
+        production_solution="The expedition reached the Arctic.",
+        definition_en="An organized journey undertaken for a specific purpose.",
     )
 
     rows = (await db_session.execute(select(TranslationCache))).scalars().all()
@@ -211,6 +223,85 @@ async def test_cache_row_with_empty_collocations_and_extras_is_treated_as_miss(
     assert result.collocations == ["go on an expedition"]
 
 
+async def test_cache_row_with_empty_definition_en_is_treated_as_miss(
+    db_session: AsyncSession,
+):
+    # Rows written before the exercise fields existed have definition_en=''
+    # (the migration default). The reader must skip them so the next
+    # translate re-fills the exercise payload. Independent of the #43 and
+    # #60 guards — this row has collocations and alt_priority populated.
+    async with SessionLocal() as setup, setup.begin():
+        setup.add(
+            TranslationCache(
+                word="weary",
+                sentence_hash=None,
+                lang="en",
+                lemma="weary",
+                translation="müde",
+                alternatives="",
+                ipa="",
+                collocations="legacy",
+                extra_examples="legacy",
+                alt_priority="none",
+            )
+        )
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=_gemini_response(_payload(translation="müde")))
+
+    gemini, http = _client(handler)
+    try:
+        await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="weary", sentence=None),
+        )
+    finally:
+        await http.aclose()
+
+    assert calls == 1, "row with empty definition_en should not have short-circuited Gemini"
+
+
+async def test_cache_hit_returns_exercise_fields(db_session: AsyncSession):
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=_gemini_response(_payload()))
+
+    gemini, http = _client(handler)
+    try:
+        first = await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="expedition", sentence=None),
+        )
+        second = await translate_with_cache(
+            session=db_session,
+            cache_session_factory=SessionLocal,
+            gemini=gemini,
+            request=TranslationRequest(word="expedition", sentence=None),
+        )
+    finally:
+        await http.aclose()
+
+    assert calls == 1, "second call must be served from the cache"
+    for result in (first, second):
+        assert result.mc_distractors == ["die Ausstellung", "die Auslieferung", "der Ausflug"]
+        assert result.synonym == "journey (weniger organisiert)"
+        assert result.antonym == ""
+        assert result.production_prompt == "Du erzählst von einer Forschungsreise."
+        assert result.production_solution == "The expedition reached the Arctic."
+        assert result.definition_en == "An organized journey undertaken for a specific purpose."
+
+
 async def test_cache_row_with_empty_alt_priority_is_treated_as_miss(
     db_session: AsyncSession,
 ):
@@ -279,6 +370,7 @@ async def test_cache_row_with_only_one_field_populated_still_hits(
                 collocations="",
                 extra_examples="However, the plan succeeded.",
                 alt_priority="none",
+                definition_en="Used to introduce a contrasting statement.",
             )
         )
 
@@ -403,6 +495,7 @@ async def test_cache_hit_strips_false_positive_alt(db_session: AsyncSession):
                 alt_ipa="/təˈwɔːrdz/",
                 alt_examples="He walked towards the door.",
                 alt_priority="minor",
+                definition_en="In the direction of something.",
             )
         )
 
