@@ -815,3 +815,83 @@ async def test_update_card_adds_the_uebung_template_to_a_pre_exercise_notetype(
         assert templates == expected
     finally:
         col.close()
+
+
+def _uebung_card(col: Collection, note_id: int):
+    return next(
+        col.get_card(cid)
+        for cid in col.card_ids_of_note(note_id)
+        if col.get_card(cid).template()["name"] == "Übung"
+    )
+
+
+async def test_listening_exercise_plays_the_word_audio_on_the_uebung_front(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            audio_data=b"mp3",
+            audio_filename="word.mp3",
+            exercise_front="<p>Was bedeutet das Wort, das du hörst?</p>",
+            exercise_back="<p>x</p>",
+            exercise_audio=True,
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        card = _uebung_card(col, col.get_card(card_id).nid)
+        assert [tag.filename for tag in card.question_av_tags()] == ["word.mp3"]
+    finally:
+        col.close()
+
+
+async def test_other_exercises_play_no_audio_on_the_uebung_front(tmp_path: Path):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            audio_data=b"mp3",
+            audio_filename="word.mp3",
+            exercise_front="<p>Welches englische Wort ist gemeint?</p>",
+            exercise_back="<p>x</p>",
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        card = _uebung_card(col, col.get_card(card_id).nid)
+        assert card.question_av_tags() == []
+    finally:
+        col.close()
+
+
+@pytest.mark.parametrize(("exercise_audio", "expected"), [(True, ["word.mp3"]), (False, [])])
+async def test_update_card_switches_the_uebung_audio_with_the_exercise(
+    tmp_path: Path, exercise_audio: bool, expected: list[str]
+):
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await writer.write_card(
+        username="alice",
+        content=_content(
+            audio_data=b"mp3",
+            audio_filename="word.mp3",
+            exercise_front="<p>vorher</p>",
+            exercise_audio=not exercise_audio,
+        ),
+    )
+
+    await writer.update_card(
+        username="alice",
+        card_id=card_id,
+        fields=NoteFieldUpdate(
+            cloze_sentence="", exercise_front="<p>nachher</p>", exercise_audio=exercise_audio
+        ),
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        card = _uebung_card(col, col.get_card(card_id).nid)
+        assert [tag.filename for tag in card.question_av_tags()] == expected
+    finally:
+        col.close()

@@ -16,9 +16,8 @@ def _entry(**overrides):
         "mc_distractors": None,
         "synonym": None,
         "antonym": None,
-        "production_prompt": None,
-        "production_solution": None,
         "definition_en": None,
+        "audio_url": None,
         "cloze_index": 0,
     }
     defaults.update(overrides)
@@ -47,6 +46,17 @@ def test_mc_exercise_shows_all_options_and_answer_on_back():
     assert "die Expedition" in exercise.back
 
 
+def test_mc_options_stay_folded_until_the_learner_opens_them():
+    # Recalling before seeing the options beats plain multiple choice.
+    entry = _entry(mc_distractors="die Ausstellung · die Auslieferung · der Ausflug")
+    front = exercise_pool(entry)[0].front
+    question, _, folded = front.partition("<details>")
+    assert "expedition" in question
+    assert "die Expedition" not in question
+    assert "<summary>" in folded
+    assert "die Expedition" in folded
+
+
 def test_mc_answer_position_is_deterministic_and_varies_with_rotation():
     def position(entry) -> int:
         front = exercise_pool(entry)[0].front
@@ -61,21 +71,41 @@ def test_mc_answer_position_is_deterministic_and_varies_with_rotation():
     assert position(rotated) == 11 % 4
 
 
-def test_synonym_exercise_asks_for_both_when_antonym_present():
+def test_synonym_exercise_shows_synonym_and_antonym_and_asks_for_the_lemma():
     entry = _entry(synonym="journey (weniger organisiert)", antonym="homecoming")
     exercise = exercise_pool(entry)[0]
-    assert "Synonym" in exercise.front
-    assert "Antonym" in exercise.front
-    assert "journey" in exercise.back
-    assert "homecoming" in exercise.back
+    assert "journey (weniger organisiert)" in exercise.front
+    assert "homecoming" in exercise.front
+    assert "expedition" not in exercise.front
+    assert "expedition" in exercise.back
+    assert "die Expedition" in exercise.back
+
+
+def test_synonym_exercise_shows_only_the_antonym_when_no_synonym_exists():
+    entry = _entry(antonym="homecoming")
+    exercise = exercise_pool(entry)[0]
+    assert "homecoming" in exercise.front
+    assert "≈" not in exercise.front
+    assert "expedition" not in exercise.front
 
 
 def test_synonym_exercise_omits_antonym_when_missing():
     entry = _entry(synonym="journey")
     exercise = exercise_pool(entry)[0]
-    assert "Synonym" in exercise.front
-    assert "Antonym" not in exercise.front
-    assert "journey" in exercise.back
+    assert "journey" in exercise.front
+    assert "≠" not in exercise.front
+
+
+def test_synonym_exercise_drops_hints_that_give_the_lemma_away():
+    entry = _entry(lemma="desirable", synonym="appealing", antonym="undesirable (unerwünscht)")
+    front = exercise_pool(entry)[0].front
+    assert "appealing" in front
+    assert "undesirable" not in front
+
+
+def test_synonym_exercise_is_skipped_when_every_hint_gives_the_lemma_away():
+    entry = _entry(lemma="toward", synonym="towards (britisch)")
+    assert exercise_pool(entry) == []
 
 
 def test_definition_exercise_hides_lemma_on_front():
@@ -87,15 +117,25 @@ def test_definition_exercise_hides_lemma_on_front():
     assert "/ˌɛkspɪˈdɪʃən/" in exercise.back
 
 
-def test_production_exercise_shows_prompt_and_solution():
-    entry = _entry(
-        production_prompt="Du erzählst von einer Forschungsreise.",
-        production_solution="The expedition reached the Arctic.",
-    )
+def test_listening_exercise_plays_the_audio_and_hides_the_word():
+    entry = _entry(audio_url="https://media.example/abc.mp3")
     exercise = exercise_pool(entry)[0]
-    assert "Du erzählst von einer Forschungsreise." in exercise.front
-    assert "The expedition reached the Arctic." not in exercise.front
-    assert "The expedition reached the Arctic." in exercise.back
+    assert exercise.audio is True
+    assert "expedition" not in exercise.front
+    assert "die Expedition" not in exercise.front
+    assert "expedition" in exercise.back
+    assert "/ˌɛkspɪˈdɪʃən/" in exercise.back
+    assert "die Expedition" in exercise.back
+
+
+def test_only_the_listening_exercise_plays_audio():
+    entry = _entry(
+        audio_url="https://media.example/abc.mp3",
+        mc_distractors="a · b · c",
+        synonym="journey",
+        definition_en="An organized journey.",
+    )
+    assert [exercise.audio for exercise in exercise_pool(entry)] == [False, False, False, True]
 
 
 def test_active_exercise_cycles_through_pool_with_cloze_index():
@@ -103,8 +143,7 @@ def test_active_exercise_cycles_through_pool_with_cloze_index():
         "mc_distractors": "a · b · c",
         "synonym": "journey",
         "definition_en": "An organized journey.",
-        "production_prompt": "Du erzählst von einer Reise.",
-        "production_solution": "The expedition went north.",
+        "audio_url": "https://media.example/abc.mp3",
     }
     fronts = [
         active_exercise(_entry(cloze_index=i, **data)).front  # type: ignore[union-attr]

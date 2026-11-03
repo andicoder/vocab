@@ -77,8 +77,6 @@ class ExerciseFields(BaseModel):
     mc_distractors: list[str] = []
     synonym: str = ""
     antonym: str = ""
-    production_prompt: str = ""
-    production_solution: str = ""
     definition_en: str = ""
 
 
@@ -193,12 +191,11 @@ given German translation. Return JSON:
     synonym exists.
 - antonym: one common English antonym of the lemma in this sense, same format
     as `synonym`. Empty string when no reasonable antonym exists (most nouns).
-- production_prompt: one German sentence describing a concrete everyday
-    situation in which the learner should produce an English sentence using
-    the lemma (e.g. "Du erzählst von einer Forschungsreise in die Arktis.").
-    Do not mention the German translation of the lemma in it.
-- production_solution: a natural English model sentence (≤ 15 words) that
-    answers `production_prompt` and uses the lemma or an inflection of it.
+    The learner sees synonym and antonym and has to recall the lemma, so
+    they must not contain the lemma or be contained in it: no spelling
+    variants ("towards" for "toward"), no prefixed forms ("undesirable" for
+    "desirable") and no shortenings ("roach" for "cockroach"). Return an
+    empty string rather than such a word.
 - definition_en: one plain-English dictionary definition of the lemma in this
     sense (one sentence, ≤ 20 words), written WITHOUT using the lemma or any
     derived form of it — the learner has to recall the word from the
@@ -492,8 +489,6 @@ async def translate_with_cache(
                 mc_distractors=split_collocations(cached.mc_distractors),
                 synonym=cached.synonym,
                 antonym=cached.antonym,
-                production_prompt=cached.production_prompt,
-                production_solution=cached.production_solution,
                 definition_en=cached.definition_en,
             )
         )
@@ -520,8 +515,6 @@ async def translate_with_cache(
         "mc_distractors": join_collocations(result.mc_distractors),
         "synonym": result.synonym,
         "antonym": result.antonym,
-        "production_prompt": result.production_prompt,
-        "production_solution": result.production_solution,
         "definition_en": result.definition_en,
     }
     insert_stmt = pg_insert(TranslationCache).values(**values)

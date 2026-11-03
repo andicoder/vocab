@@ -89,9 +89,13 @@ def _format_result(
         f"  definition_en:   {tr.definition_en!r}",
         f"  mc_distractors:  {tr.mc_distractors!r}",
         f"  synonym/antonym: {tr.synonym!r} / {tr.antonym!r}",
-        f"  production:      {tr.production_prompt!r} → {tr.production_solution!r}",
     ]
     return "\n".join(lines)
+
+
+def _shares_lemma(lemma: str, hint: str) -> bool:
+    head = hint.split("(")[0].strip().lower()
+    return lemma.lower() in head or head in lemma.lower()
 
 
 def _print_summary(rows: list[tuple[KindleEntry, TranslationResult, Plausibility]]) -> None:
@@ -111,12 +115,18 @@ def _print_summary(rows: list[tuple[KindleEntry, TranslationResult, Plausibility
     leaky = [
         e.word for e, tr, _ in rows if tr.lemma and tr.lemma.lower() in tr.definition_en.lower()
     ]
+    leaky_hints = [
+        e.word
+        for e, tr, _ in rows
+        for hint in (tr.synonym, tr.antonym)
+        if tr.lemma and hint and _shares_lemma(tr.lemma, hint)
+    ]
     synonyms = sum(1 for _, tr, _ in rows if tr.synonym)
-    productions = sum(1 for _, tr, _ in rows if tr.production_prompt and tr.production_solution)
     print(f"  empty definition_en: {len(empty_definition)}/{total} {empty_definition or ''}")
     print(f"  distractor count != 3: {len(bad_distractors)}/{total} {bad_distractors or ''}")
     print(f"  lemma leaks into definition: {len(leaky)}/{total} {leaky or ''}")
-    print(f"  synonym present: {synonyms}/{total}, production pair: {productions}/{total}")
+    print(f"  lemma leaks into synonym/antonym: {len(leaky_hints)}/{total} {leaky_hints or ''}")
+    print(f"  synonym present: {synonyms}/{total}")
 
 
 async def _smoke(

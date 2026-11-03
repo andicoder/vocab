@@ -7,6 +7,7 @@ from pathlib import Path
 import anthropic
 import httpx2
 import pytest
+from anki.collection import Collection
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -831,6 +832,34 @@ async def test_process_entry_leaves_extra_examples_null_when_empty(
     assert entry.extra_examples is None
 
 
+async def test_process_entry_plays_the_word_audio_on_the_listening_exercise(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # With no other exercise data the pool holds only the listening exercise,
+    # so the new note's Übung card has to play the word's audio up front.
+    user, entry = await _make_pending_entry(db_session)
+    llm, http = _llm_client(_make_handler(_TRANSLATE_PAYLOAD, "YES"))
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=_FakeTts(), storage=_FakeStorage()),
+        )
+    finally:
+        await http.aclose()
+
+    col = Collection(str(tmp_path / "alice" / "collection.anki2"))
+    try:
+        assert entry.anki_card_id is not None
+        note = col.get_card(entry.anki_card_id).note()  # type: ignore[arg-type]
+        assert note["Audio"].startswith("[sound:")
+        assert note["ExerciseAudio"] == note["Audio"]
+    finally:
+        col.close()
+
+
 async def test_process_entry_persists_exercise_fields(db_session: AsyncSession, tmp_path: Path):
     user, entry = await _make_pending_entry(db_session)
     payload = {
@@ -838,8 +867,6 @@ async def test_process_entry_persists_exercise_fields(db_session: AsyncSession, 
         "mc_distractors": ["die Ausstellung", "die Auslieferung", "der Ausflug"],
         "synonym": "journey (weniger organisiert)",
         "antonym": "homecoming",
-        "production_prompt": "Du erzählst von einer Forschungsreise.",
-        "production_solution": "The expedition reached the Arctic.",
         "definition_en": "An organized journey undertaken for a specific purpose.",
     }
     llm, http = _llm_client(_make_handler(payload, "YES"))
@@ -859,8 +886,6 @@ async def test_process_entry_persists_exercise_fields(db_session: AsyncSession, 
     assert entry.mc_distractors == "die Ausstellung · die Auslieferung · der Ausflug"
     assert entry.synonym == "journey (weniger organisiert)"
     assert entry.antonym == "homecoming"
-    assert entry.production_prompt == "Du erzählst von einer Forschungsreise."
-    assert entry.production_solution == "The expedition reached the Arctic."
     assert entry.definition_en == "An organized journey undertaken for a specific purpose."
 
 
@@ -885,8 +910,6 @@ async def test_process_entry_leaves_exercise_fields_null_when_omitted(
     assert entry.mc_distractors is None
     assert entry.synonym is None
     assert entry.antonym is None
-    assert entry.production_prompt is None
-    assert entry.production_solution is None
     assert entry.definition_en is None
 
 

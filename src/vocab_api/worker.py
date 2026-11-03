@@ -226,8 +226,6 @@ def _populate_entry_from_translation(
     entry.mc_distractors = join_collocations(translation.mc_distractors) or None
     entry.synonym = translation.synonym or None
     entry.antonym = translation.antonym or None
-    entry.production_prompt = translation.production_prompt or None
-    entry.production_solution = translation.production_solution or None
     entry.definition_en = translation.definition_en or None
 
 

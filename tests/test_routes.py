@@ -108,8 +108,6 @@ def test_translate_route_returns_translation(http_client: TestClient):
         "mc_distractors": ["die Ausstellung", "die Auslieferung", "der Ausflug"],
         "synonym": "journey (weniger organisiert)",
         "antonym": "",
-        "production_prompt": "Du erzählst von einer Forschungsreise.",
-        "production_solution": "The expedition reached the Arctic.",
         "definition_en": "An organized journey undertaken for a specific purpose.",
     }
 
@@ -398,7 +396,6 @@ def test_approve_backfills_exercise_fields_from_translation_cache(
                     " extra_examples='legacy', collocations='legacy',"
                     " sense_label='legacy', alt_priority='none',"
                     " mc_distractors=NULL, synonym=NULL, antonym=NULL,"
-                    " production_prompt=NULL, production_solution=NULL,"
                     " definition_en=NULL"
                     f" WHERE id = {entry_id}"
                 )
@@ -409,15 +406,12 @@ def test_approve_backfills_exercise_fields_from_translation_cache(
                     " (word, sentence_hash, lang, lemma, translation,"
                     "  alternatives, ipa, sense_key, sense_label,"
                     "  collocations, extra_examples, alt_priority,"
-                    "  mc_distractors, synonym, antonym,"
-                    "  production_prompt, production_solution, definition_en)"
+                    "  mc_distractors, synonym, antonym, definition_en)"
                     " VALUES ('expedition', :sh, 'en', 'expedition',"
                     " 'die Expedition', '', '', 'noun-journey', 'Reise',"
                     " 'go on an expedition', 'The expedition lasted months.', 'none',"
                     " 'die Ausstellung · die Auslieferung · der Ausflug',"
                     " 'journey (weniger organisiert)', '',"
-                    " 'Du erzählst von einer Forschungsreise.',"
-                    " 'The expedition reached the Arctic.',"
                     " 'An organized journey undertaken for a specific purpose.')"
                 ),
                 {"sh": sh},
@@ -436,8 +430,8 @@ def test_approve_backfills_exercise_fields_from_translation_cache(
         async with engine.begin() as conn:
             row = await conn.execute(
                 text(
-                    "SELECT mc_distractors, synonym, antonym, production_prompt,"
-                    f" production_solution, definition_en FROM vocab.entry WHERE id = {entry_id}"
+                    "SELECT mc_distractors, synonym, antonym, definition_en"
+                    f" FROM vocab.entry WHERE id = {entry_id}"
                 )
             )
             return dict(row.mappings().one())
@@ -446,8 +440,6 @@ def test_approve_backfills_exercise_fields_from_translation_cache(
     assert fields["mc_distractors"] == "die Ausstellung · die Auslieferung · der Ausflug"
     assert fields["synonym"] == "journey (weniger organisiert)"
     assert fields["antonym"] is None
-    assert fields["production_prompt"] == "Du erzählst von einer Forschungsreise."
-    assert fields["production_solution"] == "The expedition reached the Arctic."
     assert fields["definition_en"] == "An organized journey undertaken for a specific purpose."
 
 
@@ -589,10 +581,43 @@ class _FakeAnkiWithUpdate:
                 "cloze_sentence": fields.cloze_sentence,
                 "exercise_front": fields.exercise_front,
                 "exercise_back": fields.exercise_back,
+                "exercise_audio": fields.exercise_audio,
                 "direction": direction,
                 "lang": lang,
             }
         )
+
+
+def test_rotate_cloze_plays_audio_while_the_listening_exercise_is_active(
+    http_client: TestClient,
+) -> None:
+    fake_anki = _FakeAnkiWithUpdate()
+    app.dependency_overrides[get_anki_writer] = lambda: fake_anki
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("INSERT INTO vocab.user (username) VALUES ('alice') ON CONFLICT DO NOTHING")
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.entry"
+                    " (user_id, word, lemma, cloze_sentence, extra_examples,"
+                    "  translation, status, anki_card_id, lang, audio_url)"
+                    " SELECT id, 'train', 'train',"
+                    "  'The ___ was late.',"
+                    "  'A train arrived early.',"
+                    "  'der Zug', 'synced', 42, 'en', 'https://media.example/train.mp3'"
+                    " FROM vocab.user WHERE username = 'alice'"
+                )
+            )
+
+    asyncio.run(_seed())
+
+    response = http_client.post("/vocab/rotate-cloze", headers={"X-authentik-username": "alice"})
+
+    assert response.status_code == 200, response.text
+    assert [u["exercise_audio"] for u in fake_anki.updates] == [True]
 
 
 def test_rotate_cloze_passes_the_users_card_direction(http_client: TestClient) -> None:
@@ -859,8 +884,6 @@ _EXERCISE_TRANSLATION_JSON = json.dumps(
         "mc_distractors": ["der Bus", "die Bahn", "das Gleis"],
         "synonym": "railway",
         "antonym": "",
-        "production_prompt": "Du erzählst von deiner Fahrt zur Arbeit.",
-        "production_solution": "I took the train to work.",
         "definition_en": "A line of connected carriages pulled along a railway.",
     }
 )
