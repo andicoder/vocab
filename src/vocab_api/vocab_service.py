@@ -1,4 +1,7 @@
-from sqlalchemy import select
+import logging
+from dataclasses import dataclass
+
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .anki_writer import AnkiBackend
@@ -10,12 +13,15 @@ from .operations import (
     ApprovePayload,
     apply_approve,
     apply_reject,
+    backfill_exercise,
     cloze_pool,
     load_owned_entry,
     rotate_cloze,
 )
 from .schemas import EntryCreate
 from .worker import WorkerDeps, process_entry_or_defer
+
+log = logging.getLogger(__name__)
 
 
 async def add_entry(
@@ -130,3 +136,58 @@ async def rotate_cloze_sentences(
         rotated += 1
 
     return rotated
+
+
+@dataclass(frozen=True, slots=True)
+class BackfillReport:
+    backfilled: int
+    failed: int
+    remaining: int
+
+
+def _missing_exercise(user: User) -> ColumnElement[bool]:
+    return and_(
+        Entry.user_id == user.id,
+        Entry.status == "synced",
+        Entry.anki_card_id.is_not(None),
+        or_(Entry.definition_en.is_(None), Entry.definition_en == ""),
+    )
+
+
+async def backfill_exercises(
+    *, session: AsyncSession, user: User, deps: ApprovalDeps, limit: int
+) -> BackfillReport:
+    """Backfill up to `limit` synced entries that predate the Übung card."""
+    stmt = select(Entry).where(_missing_exercise(user)).order_by(Entry.id).limit(limit)
+    entries = list((await session.execute(stmt)).scalars().all())
+
+    backfilled = failed = 0
+    for entry in entries:
+        # Read before the savepoint: rolling it back expires the entry.
+        entry_id, lemma = entry.id, entry.lemma
+        try:
+            # The savepoint undoes a half-backfilled entry, so a failed one
+            # stays a candidate and the next call retries it.
+            async with session.begin_nested():
+                await backfill_exercise(session=session, entry=entry, user=user, deps=deps)
+        except Exception:
+            log.exception(
+                "exercise backfill failed id=%s user=%s lemma=%s",
+                entry_id,
+                user.username,
+                lemma,
+            )
+            failed += 1
+            continue
+        await session.commit()
+        backfilled += 1
+
+    remaining = await session.scalar(select(func.count()).where(_missing_exercise(user)))
+    log.info(
+        "exercise backfill done user=%s backfilled=%s failed=%s remaining=%s",
+        user.username,
+        backfilled,
+        failed,
+        remaining,
+    )
+    return BackfillReport(backfilled=backfilled, failed=failed, remaining=remaining or 0)

@@ -7,6 +7,7 @@ from vocab_api.anki_writer import (
     VOCAB_FIELDS,
     VOCAB_NOTETYPE,
     AnkiWriter,
+    CardDirection,
     NoteFieldUpdate,
     VocabCardContent,
     deck_name_for,
@@ -766,5 +767,51 @@ async def test_update_card_persists_exercise_fields(tmp_path: Path):
         note = col.get_card(card_id).note()
         assert note["ExerciseFront"] == "<p>neu vorn</p>"
         assert note["ExerciseBack"] == "<p>neu hinten</p>"
+    finally:
+        col.close()
+
+
+async def _write_with_pre_exercise_notetype(
+    writer: AnkiWriter, monkeypatch: pytest.MonkeyPatch, *, direction: CardDirection
+) -> int:
+    from vocab_api import anki_writer  # noqa: PLC0415 — patch target, not a dependency
+
+    current = anki_writer._wanted_templates
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            anki_writer,
+            "_wanted_templates",
+            lambda d: [t for t in current(d) if t[0] != "Übung"],
+        )
+        return await writer.write_card(username="alice", content=_content(), direction=direction)
+
+
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [("de_en", {"DE→EN", "Übung"}), ("en_de", {"EN→DE", "Übung"})],
+)
+async def test_update_card_adds_the_uebung_template_to_a_pre_exercise_notetype(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    direction: CardDirection,
+    expected: set[str],
+):
+    # Notes synced before the exercise card existed carry a notetype without
+    # the Übung template; filling ExerciseFront alone generates no card there.
+    writer = AnkiWriter(root=tmp_path)
+    card_id = await _write_with_pre_exercise_notetype(writer, monkeypatch, direction=direction)
+
+    await writer.update_card(
+        username="alice",
+        card_id=card_id,
+        fields=NoteFieldUpdate(cloze_sentence="", exercise_front="<p>Q</p>"),
+        direction=direction,
+    )
+
+    col = _open_collection(tmp_path, "alice")
+    try:
+        note_id = col.get_card(card_id).nid
+        templates = {col.get_card(cid).template()["name"] for cid in col.card_ids_of_note(note_id)}
+        assert templates == expected
     finally:
         col.close()

@@ -192,7 +192,13 @@ class AnkiBackend(Protocol):
     ) -> int: ...
 
     async def update_card(
-        self, *, username: str, card_id: int, fields: "NoteFieldUpdate"
+        self,
+        *,
+        username: str,
+        card_id: int,
+        fields: "NoteFieldUpdate",
+        direction: CardDirection = "de_en",
+        lang: str = "en",
     ) -> None: ...
 
 
@@ -260,11 +266,21 @@ class NoteFieldUpdate:
     exercise_back: str = ""
 
 
-def update_vocab_note(col: Collection, card_id: int, fields: NoteFieldUpdate) -> None:
+def update_vocab_note(
+    col: Collection,
+    card_id: int,
+    fields: NoteFieldUpdate,
+    *,
+    direction: CardDirection = "de_en",
+    lang: str = "en",
+) -> None:
     """Update the rotation-owned fields of an existing Anki note.
 
     Only touches the notes table — card scheduling (due, interval, ease) is
     stored separately in the cards table and is not affected (#82)."""
+    # A notetype from before the Übung card lacks its template, and Anki
+    # only generates the card on this update if the template is there.
+    _ensure_notetype(col, direction=direction, lang=lang)
     from anki.cards import CardId  # noqa: PLC0415 — avoid circular at module level
     from anki.notes import NoteId  # noqa: PLC0415 — avoid circular at module level
 
@@ -303,14 +319,29 @@ class AnkiWriter:
         # Rust backend; running it on the event loop would block other I/O.
         return await asyncio.to_thread(self._write_sync, username, content, direction, lang)
 
-    async def update_card(self, *, username: str, card_id: int, fields: NoteFieldUpdate) -> None:
-        await asyncio.to_thread(self._update_sync, username, card_id, fields)
+    async def update_card(  # noqa: PLR0913 — protocol params, same shape as write_card
+        self,
+        *,
+        username: str,
+        card_id: int,
+        fields: NoteFieldUpdate,
+        direction: CardDirection = "de_en",
+        lang: str = "en",
+    ) -> None:
+        await asyncio.to_thread(self._update_sync, username, card_id, fields, direction, lang)
 
-    def _update_sync(self, username: str, card_id: int, fields: NoteFieldUpdate) -> None:
+    def _update_sync(  # noqa: PLR0913 — protocol params, same shape as write_card
+        self,
+        username: str,
+        card_id: int,
+        fields: NoteFieldUpdate,
+        direction: CardDirection,
+        lang: str,
+    ) -> None:
         col_path = self.collection_path(username)
         col = Collection(str(col_path))
         try:
-            update_vocab_note(col, card_id, fields)
+            update_vocab_note(col, card_id, fields, direction=direction, lang=lang)
         finally:
             col.close()
 

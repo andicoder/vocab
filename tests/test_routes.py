@@ -577,7 +577,9 @@ class _FakeAnkiWithUpdate:
     async def write_card(self, *, username: str, **kwargs) -> int:
         return 42
 
-    async def update_card(self, *, username: str, card_id: int, fields) -> None:
+    async def update_card(
+        self, *, username: str, card_id: int, fields, direction: str = "de_en", lang: str = "en"
+    ) -> None:
         if card_id == self.fail_on_card_id:
             raise RuntimeError("anki update failed")
         self.updates.append(
@@ -587,8 +589,45 @@ class _FakeAnkiWithUpdate:
                 "cloze_sentence": fields.cloze_sentence,
                 "exercise_front": fields.exercise_front,
                 "exercise_back": fields.exercise_back,
+                "direction": direction,
+                "lang": lang,
             }
         )
+
+
+def test_rotate_cloze_passes_the_users_card_direction(http_client: TestClient) -> None:
+    # update_card brings the notetype up to date, and the default direction
+    # would add DE→EN cards to an EN→DE user's collection.
+    fake_anki = _FakeAnkiWithUpdate()
+    app.dependency_overrides[get_anki_writer] = lambda: fake_anki
+
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.user (username, card_direction) VALUES ('alice', 'en_de')"
+                    " ON CONFLICT (username) DO UPDATE SET card_direction = 'en_de'"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO vocab.entry"
+                    " (user_id, word, lemma, cloze_sentence, extra_examples,"
+                    "  translation, status, anki_card_id, lang)"
+                    " SELECT id, 'train', 'train',"
+                    "  'The ___ was late.',"
+                    "  'A train arrived early.<br>The train left.',"
+                    "  'der Zug', 'synced', 42, 'en'"
+                    " FROM vocab.user WHERE username = 'alice'"
+                )
+            )
+
+    asyncio.run(_seed())
+
+    response = http_client.post("/vocab/rotate-cloze", headers={"X-authentik-username": "alice"})
+
+    assert response.status_code == 200, response.text
+    assert [(u["direction"], u["lang"]) for u in fake_anki.updates] == [("en_de", "en")]
 
 
 def test_rotate_cloze_rotates_synced_entries_and_returns_count(
@@ -806,3 +845,127 @@ def test_cors_preflight_allows_extension_origin(http_client: TestClient) -> None
     )
     assert response.status_code == 200, response.text
     assert "access-control-allow-origin" in response.headers
+
+
+_EXERCISE_TRANSLATION_JSON = json.dumps(
+    {
+        "lemma": "train",
+        "translation": "der Zug",
+        "alternatives": "",
+        "ipa": "",
+        "collocations": ["catch a train"],
+        "extra_examples": [],
+        "alt_priority": "none",
+        "mc_distractors": ["der Bus", "die Bahn", "das Gleis"],
+        "synonym": "railway",
+        "antonym": "",
+        "production_prompt": "Du erzählst von deiner Fahrt zur Arbeit.",
+        "production_solution": "I took the train to work.",
+        "definition_en": "A line of connected carriages pulled along a railway.",
+    }
+)
+
+
+def _backfill_overrides(tmp_path: Path, fake_anki: "_FakeAnkiWithUpdate") -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return reply(_EXERCISE_TRANSLATION_JSON)
+
+    llm, _ = make_llm(handler)
+    app.dependency_overrides[get_llm] = lambda: llm
+    app.dependency_overrides[get_anki_writer] = lambda: fake_anki
+    app.dependency_overrides[get_storage] = lambda: LocalDirAudioStorage(
+        root=tmp_path, public_url_base="/audio"
+    )
+    app.dependency_overrides[get_tts] = _FakeTts
+
+
+def _seed_synced(card_ids: list[int], *, definition_en: str | None = None) -> None:
+    async def _seed() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text("INSERT INTO vocab.user (username) VALUES ('alice') ON CONFLICT DO NOTHING")
+            )
+            for card_id in card_ids:
+                await conn.execute(
+                    text(
+                        "INSERT INTO vocab.entry"
+                        " (user_id, word, lemma, sentence, cloze_sentence, translation,"
+                        "  status, anki_card_id, lang, definition_en, sense_key)"
+                        " SELECT id, :word, 'train', 'The train was late.', 'The ___ was late.',"
+                        "  'der Zug', 'synced', :card_id, 'en', :definition_en, :sense_key"
+                        " FROM vocab.user WHERE username = 'alice'"
+                    ),
+                    {
+                        "word": f"train{card_id}",
+                        "sense_key": f"sense{card_id}",
+                        "card_id": card_id,
+                        "definition_en": definition_en,
+                    },
+                )
+
+    asyncio.run(_seed())
+
+
+def _definition_of(card_id: int) -> str | None:
+    async def _query() -> str | None:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("SELECT definition_en FROM vocab.entry WHERE anki_card_id = :card_id"),
+                {"card_id": card_id},
+            )
+            return result.scalar_one()
+
+    return asyncio.run(_query())
+
+
+def test_backfill_exercises_fills_entries_synced_before_the_exercise_card(
+    http_client: TestClient, tmp_path: Path
+) -> None:
+    fake_anki = _FakeAnkiWithUpdate()
+    _backfill_overrides(tmp_path, fake_anki)
+    _seed_synced([42])
+    _seed_synced([43], definition_en="Already filled.")
+
+    response = http_client.post(
+        "/vocab/backfill-exercises", headers={"X-authentik-username": "alice"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"backfilled": 1, "failed": 0, "remaining": 0}
+    assert [u["card_id"] for u in fake_anki.updates] == [42]
+    assert fake_anki.updates[0]["exercise_front"]
+    assert fake_anki.updates[0]["cloze_sentence"] == "The ___ was late."
+    assert _definition_of(42) == "A line of connected carriages pulled along a railway."
+    assert _definition_of(43) == "Already filled."
+
+
+def test_backfill_exercises_stops_at_the_limit(http_client: TestClient, tmp_path: Path) -> None:
+    fake_anki = _FakeAnkiWithUpdate()
+    _backfill_overrides(tmp_path, fake_anki)
+    _seed_synced([42, 43, 44])
+
+    response = http_client.post(
+        "/vocab/backfill-exercises?limit=2", headers={"X-authentik-username": "alice"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"backfilled": 2, "failed": 0, "remaining": 1}
+    assert [u["card_id"] for u in fake_anki.updates] == [42, 43]
+
+
+def test_backfill_exercises_keeps_going_after_a_failed_entry(
+    http_client: TestClient, tmp_path: Path
+) -> None:
+    fake_anki = _FakeAnkiWithUpdate(fail_on_card_id=42)
+    _backfill_overrides(tmp_path, fake_anki)
+    _seed_synced([42, 43])
+
+    response = http_client.post(
+        "/vocab/backfill-exercises", headers={"X-authentik-username": "alice"}
+    )
+
+    assert response.status_code == 200, response.text
+    # The failed entry stays a candidate so the next call retries it.
+    assert response.json() == {"backfilled": 1, "failed": 1, "remaining": 1}
+    assert _definition_of(42) is None
+    assert _definition_of(43) == "A line of connected carriages pulled along a railway."
