@@ -244,8 +244,20 @@ async def rotate_cloze(*, entry: Entry, anki_writer: AnkiBackend, user: User) ->
 
     One counter drives both rotations: the gap-sentence pool and the
     exercise-type pool wrap independently via modulo."""
-    assert entry.anki_card_id is not None
     entry.cloze_index += 1
+    await _push_rotating_fields(entry=entry, anki_writer=anki_writer, user=user)
+
+
+async def backfill_exercise(
+    *, session: AsyncSession, entry: Entry, user: User, deps: ApprovalDeps
+) -> None:
+    """Give an entry synced before the Übung card its exercise payload and card."""
+    await _backfill_worker_fields(session=session, entry=entry, deps=deps)
+    await _push_rotating_fields(entry=entry, anki_writer=deps.anki_writer, user=user)
+
+
+async def _push_rotating_fields(*, entry: Entry, anki_writer: AnkiBackend, user: User) -> None:
+    assert entry.anki_card_id is not None
     exercise = active_exercise(entry)
     await anki_writer.update_card(
         username=user.username,
@@ -255,6 +267,8 @@ async def rotate_cloze(*, entry: Entry, anki_writer: AnkiBackend, user: User) ->
             exercise_front=exercise.front if exercise else "",
             exercise_back=exercise.back if exercise else "",
         ),
+        direction=cast(CardDirection, user.card_direction),
+        lang=entry.lang,
     )
 
 

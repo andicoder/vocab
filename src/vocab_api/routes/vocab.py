@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
@@ -22,6 +23,7 @@ from ..schemas import EntryCreate, EntryRead
 from ..vocab_service import (
     add_entry,
     approve_entry,
+    backfill_exercises,
     list_entries,
     reject_entry,
     rotate_cloze_sentences,
@@ -111,3 +113,26 @@ async def rotate_cloze_route(
 ) -> dict[str, int]:
     rotated = await rotate_cloze_sentences(session=session, user=user, anki_writer=anki_writer)
     return {"rotated": rotated}
+
+
+@router.post("/backfill-exercises")
+async def backfill_exercises_route(
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    storage: Annotated[AudioStorage, Depends(get_storage)],
+    anki_writer: Annotated[AnkiBackend, Depends(get_anki_writer)],
+    llm: Annotated[LlmClient, Depends(get_llm)],
+    tts: Annotated[TtsClient, Depends(get_tts)],
+    session_factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 10,
+) -> dict[str, int]:
+    deps = ApprovalDeps(
+        storage=storage,
+        anki_writer=anki_writer,
+        llm=llm,
+        tts=tts,
+        cache_session_factory=session_factory,
+        voice=settings.audio_voice,
+    )
+    report = await backfill_exercises(session=session, user=user, deps=deps, limit=limit)
+    return asdict(report)
