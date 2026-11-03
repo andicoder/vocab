@@ -4,7 +4,7 @@ import httpx2
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.llm_fake import make_llm, reply
+from tests.llm_fake import asks_for_translation, make_llm, reply
 from vocab_api.db import SessionLocal
 from vocab_api.llm import (
     LlmClient,
@@ -50,7 +50,7 @@ async def test_cache_miss_calls_llm_and_stores(db_session: AsyncSession):
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         return reply(_payload())
 
     llm, http = _client(handler)
@@ -93,7 +93,7 @@ async def test_cache_hit_skips_llm(db_session: AsyncSession):
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         return reply(_payload())
 
     llm, http = _client(handler)
@@ -121,7 +121,7 @@ async def test_cache_distinguishes_by_sentence(db_session: AsyncSession):
     payloads = iter([_payload("die Bank"), _payload("das Ufer")])
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        return reply(next(payloads))
+        return reply(next(payloads) if asks_for_translation(request) else _payload())
 
     llm, http = _client(handler)
     try:
@@ -181,7 +181,7 @@ async def test_cache_row_with_empty_collocations_and_extras_is_treated_as_miss(
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         payload = json.dumps(
             {
                 "lemma": "expedition",
@@ -237,7 +237,7 @@ async def test_cache_row_with_empty_definition_en_is_treated_as_miss(
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         return reply(_payload(translation="müde"))
 
     llm, http = _client(handler)
@@ -259,7 +259,7 @@ async def test_cache_hit_returns_exercise_fields(db_session: AsyncSession):
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         return reply(_payload())
 
     llm, http = _client(handler)
@@ -318,7 +318,7 @@ async def test_cache_row_with_empty_alt_priority_is_treated_as_miss(
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         return reply(_payload(translation="müde"))
 
     llm, http = _client(handler)
@@ -365,7 +365,7 @@ async def test_cache_row_with_only_one_field_populated_still_hits(
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         return reply(_payload())
 
     llm, http = _client(handler)
@@ -490,7 +490,7 @@ async def test_cache_hit_strips_false_positive_alt(db_session: AsyncSession):
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         return reply(_payload())
 
     llm, http = _client(handler)
@@ -565,7 +565,7 @@ async def test_cache_with_no_sentence_uses_null_hash(db_session: AsyncSession):
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
-        calls += 1
+        calls += asks_for_translation(request)
         return reply(_payload())
 
     llm, http = _client(handler)
