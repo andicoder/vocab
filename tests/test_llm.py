@@ -109,7 +109,7 @@ async def test_translate_prompt_asks_for_collocations():
     captured: dict = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["body"] = json.loads(request.content)
+        captured.setdefault("body", json.loads(request.content))
         return httpx2.Response(
             200,
             json=_message(
@@ -195,7 +195,7 @@ async def test_translate_prompt_asks_for_extra_examples_in_other_contexts():
     captured: dict = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["body"] = json.loads(request.content)
+        captured.setdefault("body", json.loads(request.content))
         return httpx2.Response(
             200,
             json=_message(
@@ -324,11 +324,89 @@ async def test_translate_prompt_asks_for_exercise_fields():
     assert "do not use the lemma" in prompt.lower() or "without using the lemma" in prompt.lower()
 
 
+_EXERCISE_FIELDS = {
+    "mc_distractors",
+    "synonym",
+    "antonym",
+    "production_prompt",
+    "production_solution",
+    "definition_en",
+}
+
+
+def _schema_properties(body: dict) -> set[str]:
+    return set(body["output_config"]["format"]["schema"]["properties"])
+
+
+async def test_translate_asks_for_exercise_fields_in_a_second_request():
+    # One schema with every field made Anthropic's grammar compilation time
+    # out after 180 s on every request (#96).
+    bodies: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            json=_message(
+                json.dumps({"lemma": "x", "translation": "y", "alternatives": "", "ipa": ""})
+            ),
+        )
+
+    client, http = _make_client(handler)
+    try:
+        await client.translate(word="x", sentence=None)
+    finally:
+        await http.aclose()
+
+    assert len(bodies) == 2
+    assert not _schema_properties(bodies[0]) & _EXERCISE_FIELDS
+    assert "definition_en" not in bodies[0]["messages"][0]["content"]
+    assert _schema_properties(bodies[1]) == _EXERCISE_FIELDS
+    assert [body["model"] for body in bodies] == ["vocab-translate", "vocab-translate"]
+
+
+async def test_exercise_request_builds_on_the_translation():
+    translation = {
+        "lemma": "expedition",
+        "translation": "die Expedition",
+        "alternatives": "die Forschungsreise",
+        "ipa": "/ˌɛkspɪˈdɪʃən/",
+    }
+    exercise = {
+        "mc_distractors": ["die Ausstellung", "die Auslieferung", "der Ausflug"],
+        "synonym": "journey",
+        "antonym": "",
+        "production_prompt": "Du erzählst von einer Forschungsreise in die Arktis.",
+        "production_solution": "The expedition reached the Arctic.",
+        "definition_en": "An organized journey undertaken for a specific purpose.",
+    }
+    replies = iter([translation, exercise])
+    bodies: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(200, json=_message(json.dumps(next(replies))))
+
+    client, http = _make_client(handler)
+    try:
+        result = await client.translate(word="expeditions", sentence="Two expeditions left.")
+    finally:
+        await http.aclose()
+
+    prompt = bodies[1]["messages"][0]["content"]
+    for given in ("expedition", "die Expedition", "die Forschungsreise", "Two expeditions left."):
+        assert given in prompt
+    assert result.translation == "die Expedition"
+    assert result.ipa == "/ˌɛkspɪˈdɪʃən/"
+    assert result.mc_distractors == exercise["mc_distractors"]
+    assert result.definition_en == exercise["definition_en"]
+
+
 async def test_translate_prompt_asks_for_sense_key_and_label():
     captured: dict = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["body"] = json.loads(request.content)
+        captured.setdefault("body", json.loads(request.content))
         return httpx2.Response(
             200,
             json=_message(
@@ -366,7 +444,7 @@ async def test_translate_asks_the_gateway_for_the_translate_alias():
     def handler(request: httpx2.Request) -> httpx2.Response:
         captured["url"] = str(request.url)
         captured["headers"] = dict(request.headers)
-        captured["body"] = json.loads(request.content)
+        captured.setdefault("body", json.loads(request.content))
         return httpx2.Response(
             200,
             json=_message(
@@ -411,7 +489,7 @@ async def test_translate_prompt_includes_part_of_speech_guidance():
     captured: dict = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["body"] = json.loads(request.content)
+        captured.setdefault("body", json.loads(request.content))
         return httpx2.Response(
             200,
             json=_message(
@@ -506,7 +584,7 @@ async def test_plausibility_asks_for_its_alias_and_reads_past_thinking_blocks():
     captured: dict = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["body"] = json.loads(request.content)
+        captured.setdefault("body", json.loads(request.content))
         body = _message("NO")
         body["content"].insert(0, {"type": "thinking", "thinking": "", "signature": "sig"})
         return httpx2.Response(200, json=body)
@@ -567,7 +645,7 @@ async def test_invent_example_prompt_includes_lemma_and_asks_for_json():
     captured: dict = {}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        captured["body"] = json.loads(request.content)
+        captured.setdefault("body", json.loads(request.content))
         return httpx2.Response(
             200,
             json=_message(json.dumps({"sentence": "x.", "cloze_sentence": "___."})),

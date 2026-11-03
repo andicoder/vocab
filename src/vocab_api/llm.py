@@ -35,7 +35,7 @@ class TranslationRequest:
 Plausibility = Literal["YES", "NO", "UNCLEAR"]
 
 
-class TranslationResult(BaseModel):
+class TranslationCore(BaseModel):
     lemma: str
     translation: str
     alternatives: str
@@ -67,6 +67,9 @@ class TranslationResult(BaseModel):
     alt_ipa: str = ""
     alt_examples: list[str] = []
     alt_priority: str = ""
+
+
+class ExerciseFields(BaseModel):
     # Exercise-card payload: material for the rotating "Übung" card.
     # Defaults keep older mocks and pre-existing cache rows compatible;
     # `definition_en` doubles as the freshness signal for this generation
@@ -77,6 +80,12 @@ class TranslationResult(BaseModel):
     production_prompt: str = ""
     production_solution: str = ""
     definition_en: str = ""
+
+
+# Asked for in two requests: one schema with all fields made Anthropic's
+# grammar compilation time out after 180 s on every request (#96).
+class TranslationResult(TranslationCore, ExerciseFields):
+    pass
 
 
 class InventedExample(BaseModel):
@@ -162,13 +171,22 @@ of the English word in context, then return JSON:
     words each, JSON list of strings). The learner needs to see the
     alternative in context; the user's original sentence still contains the
     original lemma. Empty list when alt_priority is "none".
+
+Word: {word}
+{sentence_block}
+"""
+
+_EXERCISE_PROMPT = """\
+Write exercise material for a German-speaking learner's flashcard of the
+English lemma below, in the meaning it has in the sentence and with the
+given German translation. Return JSON:
 - mc_distractors: exactly 3 German multiple-choice distractors as a JSON list.
     Each must be a plausible but clearly wrong translation of the lemma in
-    this sense — same part of speech and same shape rules as `translation`
+    this sense — same part of speech and same shape as the German translation
     (article for nouns, infinitive for verbs). Prefer semantically nearby or
     similar-sounding words a learner might confuse (e.g. for "expedition" →
     ["die Ausstellung", "die Auslieferung", "der Ausflug"]). Never include
-    the correct translation or one of `alternatives`.
+    the German translation or one of the German alternatives.
 - synonym: one common English synonym of the lemma in this sense, optionally
     followed by a short German nuance hint in parentheses (e.g.
     "journey (weniger organisiert)"). Empty string when no reasonable
@@ -187,6 +205,9 @@ of the English word in context, then return JSON:
     definition alone.
 
 Word: {word}
+Lemma: {lemma}
+German translation: {translation}
+German alternatives: {alternatives}
 {sentence_block}
 """
 
@@ -272,8 +293,18 @@ class LlmClient:
         await self._client.close()
 
     async def translate(self, *, word: str, sentence: str | None) -> TranslationResult:
-        prompt = _TRANSLATE_PROMPT.format(word=word, sentence_block=_sentence_block(sentence))
-        return await self._parse(TRANSLATE_ALIAS, prompt, TranslationResult)
+        sentence_block = _sentence_block(sentence)
+        prompt = _TRANSLATE_PROMPT.format(word=word, sentence_block=sentence_block)
+        core = await self._parse(TRANSLATE_ALIAS, prompt, TranslationCore)
+        prompt = _EXERCISE_PROMPT.format(
+            word=word,
+            lemma=core.lemma,
+            translation=core.translation,
+            alternatives=core.alternatives or "(none)",
+            sentence_block=sentence_block,
+        )
+        exercise = await self._parse(TRANSLATE_ALIAS, prompt, ExerciseFields)
+        return TranslationResult(**core.model_dump(), **exercise.model_dump())
 
     async def invent_example(self, *, lemma: str) -> InventedExample:
         prompt = _INVENT_EXAMPLE_PROMPT.format(lemma=lemma)

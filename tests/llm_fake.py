@@ -36,6 +36,12 @@ def prompt_of(request: httpx2.Request) -> str:
     return str(json.loads(request.content)["messages"][0]["content"])
 
 
+def asks_for_translation(request: httpx2.Request) -> bool:
+    """True for the translate request, False for the exercise request that follows it."""
+    schema = json.loads(request.content)["output_config"]["format"]["schema"]
+    return "lemma" in schema["properties"]
+
+
 def make_llm(handler: Handler) -> tuple[LlmClient, httpx2.AsyncClient]:
     http = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
     client = anthropic.AsyncAnthropic(
