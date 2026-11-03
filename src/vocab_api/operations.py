@@ -134,6 +134,7 @@ async def write_entry_to_anki(*, entry: Entry, user: User, deps: ApprovalDeps) -
         alt_audio_filename=alt_audio_filename,
         exercise_front=exercise.front if exercise else "",
         exercise_back=exercise.back if exercise else "",
+        exercise_audio=exercise.audio if exercise else False,
     )
     direction = cast(CardDirection, user.card_direction)
     card_id = await deps.anki_writer.write_card(
@@ -229,8 +230,6 @@ def _backfill_translation_fields(entry: Entry, tr: TranslationResult) -> None:
         "mc_distractors": join_collocations(tr.mc_distractors),
         "synonym": tr.synonym,
         "antonym": tr.antonym,
-        "production_prompt": tr.production_prompt,
-        "production_solution": tr.production_solution,
         "definition_en": tr.definition_en,
     }
     for attr, value in backfills.items():
@@ -266,6 +265,7 @@ async def _push_rotating_fields(*, entry: Entry, anki_writer: AnkiBackend, user:
             cloze_sentence=active_cloze_sentence(entry),
             exercise_front=exercise.front if exercise else "",
             exercise_back=exercise.back if exercise else "",
+            exercise_audio=exercise.audio if exercise else False,
         ),
         direction=cast(CardDirection, user.card_direction),
         lang=entry.lang,

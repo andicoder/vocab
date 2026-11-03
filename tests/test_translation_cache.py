@@ -34,8 +34,6 @@ def _payload(translation: str = "die Expedition") -> str:
             "mc_distractors": ["die Ausstellung", "die Auslieferung", "der Ausflug"],
             "synonym": "journey (weniger organisiert)",
             "antonym": "",
-            "production_prompt": "Du erzählst von einer Forschungsreise.",
-            "production_solution": "The expedition reached the Arctic.",
             "definition_en": "An organized journey undertaken for a specific purpose.",
         }
     )
@@ -76,8 +74,6 @@ async def test_cache_miss_calls_llm_and_stores(db_session: AsyncSession):
         mc_distractors=["die Ausstellung", "die Auslieferung", "der Ausflug"],
         synonym="journey (weniger organisiert)",
         antonym="",
-        production_prompt="Du erzählst von einer Forschungsreise.",
-        production_solution="The expedition reached the Arctic.",
         definition_en="An organized journey undertaken for a specific purpose.",
     )
 
@@ -284,8 +280,6 @@ async def test_cache_hit_returns_exercise_fields(db_session: AsyncSession):
         assert result.mc_distractors == ["die Ausstellung", "die Auslieferung", "der Ausflug"]
         assert result.synonym == "journey (weniger organisiert)"
         assert result.antonym == ""
-        assert result.production_prompt == "Du erzählst von einer Forschungsreise."
-        assert result.production_solution == "The expedition reached the Arctic."
         assert result.definition_en == "An organized journey undertaken for a specific purpose."
 
 

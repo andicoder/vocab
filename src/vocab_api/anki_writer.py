@@ -35,6 +35,8 @@ VOCAB_FIELDS = [
     # (Anki skips templates whose rendered question is empty).
     "ExerciseFront",
     "ExerciseBack",
+    # A copy of Audio while the listening exercise is active, empty otherwise.
+    "ExerciseAudio",
 ]
 
 CardDirection = Literal["de_en", "en_de", "both"]
@@ -124,7 +126,7 @@ _BACK_EN_DE = (
 # The exercise card renders pre-built HTML from exercise.py verbatim. An
 # empty ExerciseFront yields an empty question, so Anki generates no card —
 # notes without exercise data cost nothing until rotation fills the field.
-_FRONT_EXERCISE = "{{ExerciseFront}}"
+_FRONT_EXERCISE = "{{ExerciseFront}}{{ExerciseAudio}}"
 _BACK_EXERCISE = "{{FrontSide}}<hr>{{ExerciseBack}}"
 
 
@@ -171,6 +173,7 @@ class VocabCardContent:
     # exercise data yet" and suppresses the card.
     exercise_front: str = ""
     exercise_back: str = ""
+    exercise_audio: bool = False
 
 
 class AnkiBackend(Protocol):
@@ -250,6 +253,7 @@ def add_vocab_note(
     note["AltAudio"] = f"[sound:{content.alt_audio_filename}]" if content.alt_audio_filename else ""
     note["ExerciseFront"] = content.exercise_front
     note["ExerciseBack"] = content.exercise_back
+    note["ExerciseAudio"] = note["Audio"] if content.exercise_audio else ""
 
     col.add_note(note, deck_id=home_deck_id)
     card_ids = col.find_cards(f"nid:{note.id}")
@@ -264,6 +268,7 @@ class NoteFieldUpdate:
     cloze_sentence: str
     exercise_front: str = ""
     exercise_back: str = ""
+    exercise_audio: bool = False
 
 
 def update_vocab_note(
@@ -289,6 +294,7 @@ def update_vocab_note(
     note["ClozeSentence"] = fields.cloze_sentence
     note["ExerciseFront"] = fields.exercise_front
     note["ExerciseBack"] = fields.exercise_back
+    note["ExerciseAudio"] = note["Audio"] if fields.exercise_audio else ""
     col.update_note(note)
 
 

@@ -102,8 +102,6 @@ class Entry(Base):
     mc_distractors: Mapped[str | None] = mapped_column(Text, nullable=True)
     synonym: Mapped[str | None] = mapped_column(Text, nullable=True)
     antonym: Mapped[str | None] = mapped_column(Text, nullable=True)
-    production_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
-    production_solution: Mapped[str | None] = mapped_column(Text, nullable=True)
     definition_en: Mapped[str | None] = mapped_column(Text, nullable=True)
     lang: Mapped[str] = mapped_column(String, nullable=False, default="en", server_default="en")
     status: Mapped[str] = mapped_column(
@@ -162,8 +160,6 @@ class TranslationCache(Base):
     mc_distractors: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     synonym: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     antonym: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    production_prompt: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
-    production_solution: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     definition_en: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

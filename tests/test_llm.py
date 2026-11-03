@@ -234,8 +234,6 @@ async def test_translate_returns_exercise_fields():
             "mc_distractors": ["die Ausstellung", "die Auslieferung", "die Ausschreitung"],
             "synonym": "journey (weniger organisiert)",
             "antonym": "homecoming",
-            "production_prompt": "Du erzählst von einer Forschungsreise in die Arktis.",
-            "production_solution": "The expedition reached the Arctic after three weeks.",
             "definition_en": "An organized journey undertaken for a specific purpose.",
         }
     )
@@ -256,8 +254,6 @@ async def test_translate_returns_exercise_fields():
     ]
     assert result.synonym == "journey (weniger organisiert)"
     assert result.antonym == "homecoming"
-    assert result.production_prompt == "Du erzählst von einer Forschungsreise in die Arktis."
-    assert result.production_solution == "The expedition reached the Arctic after three weeks."
     assert result.definition_en == "An organized journey undertaken for a specific purpose."
 
 
@@ -283,8 +279,6 @@ async def test_translate_defaults_exercise_fields_when_omitted():
     assert result.mc_distractors == []
     assert result.synonym == ""
     assert result.antonym == ""
-    assert result.production_prompt == ""
-    assert result.production_solution == ""
     assert result.definition_en == ""
 
 
@@ -307,15 +301,14 @@ async def test_translate_prompt_asks_for_exercise_fields():
         await http.aclose()
 
     prompt = captured["body"]["messages"][0]["content"]
-    for key in (
-        "mc_distractors",
-        "synonym",
-        "antonym",
-        "production_prompt",
-        "production_solution",
-        "definition_en",
-    ):
+    for key in ("mc_distractors", "synonym", "antonym", "definition_en"):
         assert key in prompt
+    # Writing a free sentence was too slow for an Anki review; the card no
+    # longer asks for it, so the prompt must not pay for it either.
+    assert "production" not in prompt
+    # The card shows synonym and antonym and asks for the lemma, so neither
+    # may contain it (`toward` → `towards`, `desirable` → `undesirable`).
+    assert "must not contain the lemma" in prompt.lower()
     # Distractors must be plausible-but-wrong German translations, not random
     # nouns — the prompt has to say so explicitly.
     assert "wrong" in prompt.lower() or "incorrect" in prompt.lower()
@@ -324,14 +317,7 @@ async def test_translate_prompt_asks_for_exercise_fields():
     assert "do not use the lemma" in prompt.lower() or "without using the lemma" in prompt.lower()
 
 
-_EXERCISE_FIELDS = {
-    "mc_distractors",
-    "synonym",
-    "antonym",
-    "production_prompt",
-    "production_solution",
-    "definition_en",
-}
+_EXERCISE_FIELDS = {"mc_distractors", "synonym", "antonym", "definition_en"}
 
 
 def _schema_properties(body: dict) -> set[str]:
@@ -376,8 +362,6 @@ async def test_exercise_request_builds_on_the_translation():
         "mc_distractors": ["die Ausstellung", "die Auslieferung", "der Ausflug"],
         "synonym": "journey",
         "antonym": "",
-        "production_prompt": "Du erzählst von einer Forschungsreise in die Arktis.",
-        "production_solution": "The expedition reached the Arctic.",
         "definition_en": "An organized journey undertaken for a specific purpose.",
     }
     replies = iter([translation, exercise])

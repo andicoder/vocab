@@ -1,7 +1,7 @@
 """Rendering for the rotating "Übung" Anki card.
 
-Each entry carries up to four exercise payloads (multiple choice, synonym/
-antonym, monolingual definition, production). The pool skips types whose
+Each entry carries up to four exercises (multiple choice, synonym/antonym,
+monolingual definition, listening). The pool skips types whose
 data is missing; `active_exercise` picks one via the entry's `cloze_index`
 so the existing rotate-cloze job drives both the gap-sentence rotation and
 the exercise-type rotation with a single counter.
@@ -12,11 +12,15 @@ from dataclasses import dataclass
 from .llm import split_collocations
 from .models import Entry
 
+_WHICH_WORD = "Welches englische Wort ist gemeint?"
+
 
 @dataclass(frozen=True, slots=True)
 class Exercise:
     front: str
     back: str
+    # The note's Audio plays on the front; only the listening exercise asks for it.
+    audio: bool = False
 
 
 def exercise_pool(entry: Entry) -> list[Exercise]:
@@ -24,12 +28,12 @@ def exercise_pool(entry: Entry) -> list[Exercise]:
     pool: list[Exercise] = []
     if entry.mc_distractors and entry.translation and entry.lemma:
         pool.append(_multiple_choice(entry))
-    if entry.synonym and entry.lemma:
+    if _word_hints(entry):
         pool.append(_synonym_antonym(entry))
     if entry.definition_en and entry.lemma:
         pool.append(_definition(entry))
-    if entry.production_prompt and entry.production_solution:
-        pool.append(_production(entry))
+    if entry.audio_url and entry.lemma:
+        pool.append(_listening(entry))
     return pool
 
 
@@ -53,35 +57,47 @@ def _multiple_choice(entry: Entry) -> Exercise:
     options.insert(position, entry.translation or "")
     items = "".join(f"<li>{option}</li>" for option in options)
     sentence = f'<p><em>„{entry.sentence}"</em></p>' if entry.sentence else ""
+    # Folded options: the learner tries to recall the answer before seeing
+    # them, which beats plain multiple choice.
     front = (
         f"{sentence}"
         f"<p>Welche Übersetzung passt zu <strong>{entry.lemma}</strong>?</p>"
-        f"<ol>{items}</ol>"
+        f"<details><summary>Optionen zeigen</summary><ol>{items}</ol></details>"
     )
     return Exercise(front=front, back=_answer_line(entry))
 
 
+def _word_hints(entry: Entry) -> list[str]:
+    """Synonym and antonym lines that don't give the lemma away.
+
+    Backstop for the prompt rule: `towards` would answer `toward`, and
+    `undesirable` would answer `desirable`."""
+    if not entry.lemma:
+        return []
+    lemma = entry.lemma.lower()
+    hints = []
+    for sign, word in (("≈", entry.synonym), ("≠", entry.antonym)):
+        head = (word or "").split("(")[0].strip().lower()
+        if head and lemma not in head and head not in lemma:
+            hints.append(f"{sign} {word}")
+    return hints
+
+
 def _synonym_antonym(entry: Entry) -> Exercise:
-    ask_antonym = " und ein Antonym" if entry.antonym else ""
-    sentence = f'<p><small><em>„{entry.sentence}"</em></small></p>' if entry.sentence else ""
-    front = f"<p>Nenne ein Synonym{ask_antonym} für <strong>{entry.lemma}</strong>.</p>{sentence}"
-    back = f"<p>Synonym: <strong>{entry.synonym}</strong></p>"
-    if entry.antonym:
-        back += f"<p>Antonym: <strong>{entry.antonym}</strong></p>"
-    return Exercise(front=front, back=back)
+    front = f"<p>{'<br>'.join(_word_hints(entry))}</p><p>{_WHICH_WORD}</p>"
+    return Exercise(front=front, back=_word_back(entry))
 
 
 def _definition(entry: Entry) -> Exercise:
-    front = f"<p><em>{entry.definition_en}</em></p><p>Welches englische Wort ist gemeint?</p>"
+    front = f"<p><em>{entry.definition_en}</em></p><p>{_WHICH_WORD}</p>"
+    return Exercise(front=front, back=_word_back(entry))
+
+
+def _listening(entry: Entry) -> Exercise:
+    front = "<p>Was bedeutet das Wort, das du hörst?</p>"
+    return Exercise(front=front, back=_word_back(entry), audio=True)
+
+
+def _word_back(entry: Entry) -> str:
     ipa = f"<small>{entry.ipa}</small>" if entry.ipa else ""
-    back = f"<h2>{entry.lemma}</h2>{ipa}{_answer_line(entry)}"
-    return Exercise(front=front, back=back)
-
-
-def _production(entry: Entry) -> Exercise:
-    front = (
-        f"<p>{entry.production_prompt}</p>"
-        "<p>Bilde einen englischen Satz mit dem passenden Wort.</p>"
-    )
-    back = f"<p><em>{entry.production_solution}</em></p>{_answer_line(entry)}"
-    return Exercise(front=front, back=back)
+    return f"<h2>{entry.lemma}</h2>{ipa}{_answer_line(entry)}"
