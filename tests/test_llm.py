@@ -762,6 +762,20 @@ def test_strip_low_value_alt_drops_an_alt_the_model_itself_rated_none():
     assert stripped.alt_priority == "none"
 
 
+def test_translate_prompt_makes_an_idiom_the_headword():
+    # #70: "No dice." taught dice = der Erfolg, false outside that one phrase.
+    assert "the whole idiom" in _TRANSLATE_PROMPT
+    assert '"no dice"' in _TRANSLATE_PROMPT
+    # Without this the rule overshot in the real run: "yanked open" became "yank open".
+    assert '"yanked open" stays "yank"' in _TRANSLATE_PROMPT
+
+
+def test_translate_prompt_teaches_the_german_compound_for_a_noun_modifier():
+    # #72: "fellow designers" taught fellow = kollegial, a different claim.
+    assert '"Mit-"' in _TRANSLATE_PROMPT
+    assert '"fellow designers"' in _TRANSLATE_PROMPT
+
+
 def test_translate_prompt_documents_alt_classification_negative_rules():
     # #63: pin the three negative rules into the prompt as a regression
     # guard. The deterministic filter catches AE/BE +s suffixes and

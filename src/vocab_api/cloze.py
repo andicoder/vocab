@@ -20,13 +20,15 @@ def mask_word_in_sentence(*, word: str, sentence: str) -> str | None:
 async def populate_cloze(entry: Entry, *, llm: LlmClient, lemma: str) -> None:
     """Fill `entry.cloze_sentence` (and `entry.sentence` if it was empty).
 
-    Prefers the deterministic path: mask the user-submitted surface form
-    (entry.word) inside the user-submitted source sentence. Falls back to
-    an LLM-invented example only when there is no source sentence at all
-    or when the surface form does not appear in the source sentence
-    (a rare edge case worth a warning)."""
+    Prefers the deterministic path: mask the lemma, which covers a multi-word
+    idiom, or else the user-submitted surface form (entry.word) inside the
+    user-submitted source sentence. Falls back to an LLM-invented example only
+    when there is no source sentence at all or when neither form appears in
+    the source sentence (a rare edge case worth a warning)."""
     if entry.sentence:
-        masked = mask_word_in_sentence(word=entry.word, sentence=entry.sentence)
+        masked = mask_word_in_sentence(word=lemma, sentence=entry.sentence)
+        if masked is None:
+            masked = mask_word_in_sentence(word=entry.word, sentence=entry.sentence)
         if masked is not None:
             entry.cloze_sentence = masked
             return

@@ -742,12 +742,10 @@ async def test_cloze_sentence_invented_when_entry_has_no_sentence(
 async def test_cloze_sentence_invented_when_word_not_in_source_sentence(
     db_session: AsyncSession, tmp_path: Path
 ):
-    # Edge case: user submits `word="dozens"` with a sentence that contains
-    # only the lemma form `dozen`. The deterministic regex fails, so the
-    # worker has to fall back to inventing an example based on the lemma.
-    user, entry = await _make_pending_entry(
-        db_session, word="dozens", sentence="Only a dozen left."
-    )
+    # Edge case: the sentence contains neither the submitted word nor its
+    # lemma. The deterministic regex fails, so the worker has to fall back to
+    # inventing an example based on the lemma.
+    user, entry = await _make_pending_entry(db_session, word="dozens", sentence="Only twelve left.")
     invented = {
         "sentence": "Dozens turned up at the door.",
         "cloze_sentence": "___ turned up at the door.",

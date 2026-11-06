@@ -1,4 +1,7 @@
-from vocab_api.cloze import mask_word_in_sentence
+from types import SimpleNamespace
+from typing import Any, cast
+
+from vocab_api.cloze import mask_word_in_sentence, populate_cloze
 
 
 def test_returns_sentence_with_word_replaced_by_blank():
@@ -46,3 +49,22 @@ def test_handles_word_at_end_of_sentence():
         mask_word_in_sentence(word="marathon", sentence="I want to train for a marathon.")
         == "I want to train for a ___."
     )
+
+
+async def test_populate_cloze_masks_the_whole_idiom_when_it_is_the_lemma():
+    # Masking only the encountered word would leave "No ___." for "no dice".
+    entry: Any = SimpleNamespace(
+        id=1, word="dice", sentence="He tried. No dice.", cloze_sentence=None
+    )
+
+    await populate_cloze(entry, llm=cast(Any, None), lemma="no dice")
+
+    assert entry.cloze_sentence == "He tried. ___."
+
+
+async def test_populate_cloze_masks_the_surface_form_of_an_inflected_lemma():
+    entry: Any = SimpleNamespace(id=1, word="dozens", sentence="Dozens fell.", cloze_sentence=None)
+
+    await populate_cloze(entry, llm=cast(Any, None), lemma="dozen")
+
+    assert entry.cloze_sentence == "___ fell."

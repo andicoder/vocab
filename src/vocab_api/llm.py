@@ -100,11 +100,19 @@ _TRANSLATE_PROMPT = """\
 Translate the following English word to German for a vocabulary flashcard.
 Use the sentence to determine the part of speech and the *specific meaning*
 of the English word in context, then return JSON:
-- lemma: dictionary form of the English word, lowercase, no article
+- lemma: dictionary form of the English word, lowercase, no article. If the word
+    has this meaning only inside a fixed idiom, use the whole idiom instead and
+    translate that: "no dice" for "dice" in "No dice.", not "dice" = "der Erfolg".
+    A learner would otherwise believe the bare word means this everywhere.
+    A verb with an ordinary particle is no idiom: "yanked open" stays "yank".
 - translation: primary German translation in dictionary form:
     * for nouns: include article (e.g. "die Expedition")
     * for verbs: German infinitive only, no article (e.g. "springen", NOT "der Sprung")
     * for adjectives/adverbs: uninflected form, no article (e.g. "genial", NOT "der geniale")
+    * for a word that only classifies the following noun where German would build
+        a compound: the compound element with a hyphen. "fellow designers" means
+        "Mit-" or "Kollegen-" ("Mitdesigner"), NOT "kollegial", which describes
+        behaviour. Likewise "senior engineer" is "Senior-" or "leitend".
 - alternatives: comma-separated German alternatives in the same form as `translation`, may be empty
 - ipa: US IPA in slashes (e.g. "/ˌɛkspɪˈdɪʃən/")
 - sense_key: canonical slug for the specific meaning, lowercase ASCII,
