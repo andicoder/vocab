@@ -67,7 +67,7 @@ def test_mc_answer_position_is_deterministic_and_varies_with_rotation():
     entry_b = _entry(id=10, mc_distractors="a · b · c")
     assert position(entry_a) == position(entry_b) == 10 % 4
 
-    rotated = _entry(id=10, cloze_index=1, mc_distractors="a · b · c")
+    rotated = _entry(id=10, cloze_index=4, mc_distractors="a · b · c")
     assert position(rotated) == 11 % 4
 
 
@@ -153,3 +153,69 @@ def test_active_exercise_cycles_through_pool_with_cloze_index():
     # MC fronts differ across rotations (answer position moves), so compare
     # the wrap-around on a position-stable type instead.
     assert fronts[2] == active_exercise(_entry(cloze_index=6, **data)).front  # type: ignore[union-attr]
+
+
+_FULL_POOL = {
+    "mc_distractors": "a · b · c",
+    "synonym": "journey",
+    "definition_en": "a long trip",
+    "audio_url": "https://media.example/expedition.mp3",
+}
+
+
+def _kind(front: str) -> str:
+    for marker, kind in (
+        ("<details>", "choice"),
+        ("≈", "synonym"),
+        ("a long trip", "definition"),
+        ("hörst", "listening"),
+    ):
+        if marker in front:
+            return kind
+    raise AssertionError(front)
+
+
+def _answer_position(front: str) -> int:
+    items = front.split("<ol>")[1].split("</ol>")[0].split("</li>")
+    return next(i for i, item in enumerate(items) if "die Expedition" in item)
+
+
+def test_entries_on_the_same_rotation_get_different_exercise_types():
+    # The nightly job bumps every entry at once, so most share one cloze_index;
+    # picking by that alone gave the whole deck the same type each day.
+    kinds = {
+        _kind(active_exercise(_entry(id=entry_id, cloze_index=151, **_FULL_POOL)).front)  # type: ignore[union-attr]
+        for entry_id in range(1, 5)
+    }
+    assert kinds == {"choice", "synonym", "definition", "listening"}
+
+
+def test_one_entry_still_cycles_through_every_type():
+    kinds = {
+        _kind(active_exercise(_entry(id=7, cloze_index=i, **_FULL_POOL)).front)  # type: ignore[union-attr]
+        for i in range(4)
+    }
+    assert kinds == {"choice", "synonym", "definition", "listening"}
+
+
+def test_mc_answer_is_not_always_first_when_the_type_rotation_lands_on_it():
+    # Type and answer position must not hang on the same sum: with four types
+    # and four options, the answer would sit in slot one on every choice card.
+    positions = set()
+    for entry_id in range(1, 40):
+        for cloze_index in range(4):
+            exercise = active_exercise(_entry(id=entry_id, cloze_index=cloze_index, **_FULL_POOL))
+            assert exercise is not None
+            if _kind(exercise.front) == "choice":
+                positions.add(_answer_position(exercise.front))
+    assert positions == {0, 1, 2, 3}
+
+
+def test_mc_answer_moves_between_one_entrys_choice_cards():
+    positions = set()
+    for cloze_index in range(40):
+        exercise = active_exercise(_entry(id=7, cloze_index=cloze_index, **_FULL_POOL))
+        assert exercise is not None
+        if _kind(exercise.front) == "choice":
+            positions.add(_answer_position(exercise.front))
+    assert len(positions) > 1
