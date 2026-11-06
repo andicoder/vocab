@@ -13,6 +13,7 @@ from .anki_writer import AnkiBackend
 from .audio import AudioRequest, AudioStorage, TtsClient, synthesize_with_cache
 from .cloze import populate_cloze
 from .llm import (
+    KnownSense,
     LlmClient,
     TranslationRequest,
     TranslationResult,
@@ -84,14 +85,7 @@ async def process_entry(
     # worker retry (#10). Since #24 the duplicate guard is per-sense — the
     # same lemma can legitimately land twice as long as the sense_key
     # differs (`train` as verb vs. as noun).
-    existing = await _find_existing_sense(
-        session,
-        user_id=user.id,
-        lemma=translation.lemma,
-        lang=entry.lang,
-        sense_key=translation.sense_key,
-        exclude_id=entry.id,
-    )
+    existing = await _find_duplicate(session, entry=entry, translation=translation, llm=deps.llm)
     if existing is not None:
         log.info(
             "dropped duplicate-sense entry id=%s user=%s lemma=%s sense=%s",
@@ -229,27 +223,45 @@ def _populate_entry_from_translation(
     entry.definition_en = translation.definition_en or None
 
 
-async def _find_existing_sense(  # noqa: PLR0913 — six narrow scalars are clearer than a one-call-site dataclass
+async def _find_duplicate(
     session: AsyncSession,
     *,
-    user_id: int,
-    lemma: str,
-    lang: str,
-    sense_key: str,
-    exclude_id: int,
+    entry: Entry,
+    translation: TranslationResult,
+    llm: LlmClient,
 ) -> Entry | None:
-    stmt = (
-        select(Entry)
-        .where(
-            Entry.user_id == user_id,
-            Entry.lemma == lemma,
-            Entry.lang == lang,
-            Entry.sense_key == sense_key,
-            Entry.id != exclude_id,
-        )
-        .limit(1)
+    """The user's card that already teaches this meaning of the lemma, if any.
+
+    The model invents `sense_key` per call, so an equal key proves a duplicate
+    but a different one proves nothing (#71). This runs after the shared
+    translation cache because the known senses are per user; the follow-up
+    request only fires for a lemma the user already has."""
+    stmt = select(Entry).where(
+        Entry.user_id == entry.user_id,
+        Entry.lemma == translation.lemma,
+        Entry.lang == entry.lang,
+        Entry.id != entry.id,
     )
-    return (await session.execute(stmt)).scalar_one_or_none()
+    siblings = list((await session.execute(stmt)).scalars().all())
+    by_key = {sibling.sense_key: sibling for sibling in siblings}
+    if translation.sense_key in by_key:
+        return by_key[translation.sense_key]
+    if not siblings:
+        return None
+    match = await llm.match_known_sense(
+        sentence=entry.sentence,
+        translation=translation,
+        known=[
+            KnownSense(
+                sense_key=sibling.sense_key,
+                translation=sibling.translation or "",
+                sense_label=sibling.sense_label or "",
+                sentence=sibling.sentence,
+            )
+            for sibling in siblings
+        ],
+    )
+    return by_key[match] if match else None
 
 
 async def _claim_one_pending(session: AsyncSession) -> Entry | None:
