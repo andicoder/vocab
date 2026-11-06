@@ -8,7 +8,7 @@ from anki.collection import Collection
 from anki.sync_pb2 import MediaSyncStatusResponse, SyncAuth, SyncCollectionResponse
 
 from vocab_api.anki_sync import AnkiSyncWriter, parse_credentials_json
-from vocab_api.anki_writer import VocabCardContent
+from vocab_api.anki_writer import NoteFieldUpdate, VocabCardContent
 
 
 def _content(**overrides: Any) -> VocabCardContent:
@@ -249,28 +249,110 @@ async def test_push_with_full_upload_signal_uploads_local_data(
     assert harness.full_calls == [("hkey-alice", 7, True)]
 
 
+_NO_CHANGES = SyncCollectionResponse(required=SyncCollectionResponse.NO_CHANGES)
+
+
+def _drop_exercise_audio_field(writer: AnkiSyncWriter, username: str) -> None:
+    """Leave the shadow on an older notetype, so the next write has a field to add."""
+    col = Collection(str(writer.shadow_path(username)))
+    try:
+        model = col.models.by_name("Vocab")
+        assert model is not None
+        field = next(f for f in model["flds"] if f["name"] == "ExerciseAudio")
+        col.models.remove_field(model, field)
+        col.models.update_dict(model)
+    finally:
+        col.close()
+
+
 @pytest.mark.parametrize(
     "push_required",
     [SyncCollectionResponse.FULL_SYNC, SyncCollectionResponse.FULL_DOWNLOAD],
 )
-async def test_push_with_full_download_or_full_sync_raises(
+async def test_push_with_full_sync_signal_raises_when_our_write_left_the_schema_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, push_required: int
 ):
-    # FULL_DOWNLOAD or FULL_SYNC after our write means the server claims
-    # canonical data that we don't have — accepting either would erase
-    # the just-written note. Fail loud so the entry stays unsynced and
-    # the next worker tick retries.
-    pull = SyncCollectionResponse(required=SyncCollectionResponse.NO_CHANGES)
+    # With the notetype already current, a full-sync demand after our write
+    # can't come from us: the server claims canonical data we don't have, and
+    # accepting either direction could erase something. Fail loud so the entry
+    # stays unsynced and the next worker tick retries.
     push = SyncCollectionResponse(required=push_required, server_media_usn=1)
-    harness = _patch_sync(monkeypatch, sync_responses=[pull, push])
+    harness = _patch_sync(monkeypatch, sync_responses=[_NO_CHANGES, _NO_CHANGES, _NO_CHANGES, push])
 
     writer = AnkiSyncWriter(
         shadow_root=tmp_path,
         sync_endpoint="http://anki-sync.test",
         credentials={"alice": "pw1"},
     )
+    await writer.write_card(username="alice", content=_content())
+
     with pytest.raises(RuntimeError, match="full sync required after write"):
-        await writer.write_card(username="alice", content=_content())
+        await writer.write_card(username="alice", content=_content(word="z", lemma="z"))
+    assert harness.full_calls == []
+
+
+async def test_write_card_uploads_when_its_own_notetype_change_forces_a_full_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Adding a field bumps the shadow's schema-mod-time, and the server then
+    # answers FULL_SYNC. Refusing would block every Anki write until someone
+    # uploads by hand (it blocked them from the first Übung-card deploy on).
+    push = SyncCollectionResponse(required=SyncCollectionResponse.FULL_SYNC, server_media_usn=7)
+    harness = _patch_sync(monkeypatch, sync_responses=[_NO_CHANGES, _NO_CHANGES, _NO_CHANGES, push])
+
+    writer = AnkiSyncWriter(
+        shadow_root=tmp_path,
+        sync_endpoint="http://anki-sync.test",
+        credentials={"alice": "pw1"},
+    )
+    await writer.write_card(username="alice", content=_content())
+    _drop_exercise_audio_field(writer, "alice")
+
+    await writer.write_card(username="alice", content=_content(word="z", lemma="z"))
+
+    assert harness.full_calls == [("hkey-alice", 7, True)]
+
+
+async def test_update_card_uploads_when_its_own_notetype_change_forces_a_full_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    push = SyncCollectionResponse(required=SyncCollectionResponse.FULL_SYNC, server_media_usn=7)
+    harness = _patch_sync(monkeypatch, sync_responses=[_NO_CHANGES, _NO_CHANGES, _NO_CHANGES, push])
+
+    writer = AnkiSyncWriter(
+        shadow_root=tmp_path,
+        sync_endpoint="http://anki-sync.test",
+        credentials={"alice": "pw1"},
+    )
+    card_id = await writer.write_card(username="alice", content=_content())
+    _drop_exercise_audio_field(writer, "alice")
+
+    await writer.update_card(
+        username="alice",
+        card_id=card_id,
+        fields=NoteFieldUpdate(cloze_sentence="A ___ north.", exercise_front="<p>x</p>"),
+    )
+
+    assert harness.full_calls == [("hkey-alice", 7, True)]
+
+
+async def test_full_download_demand_raises_even_after_our_own_notetype_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # FULL_DOWNLOAD says our side is empty, which a schema change can't explain.
+    push = SyncCollectionResponse(required=SyncCollectionResponse.FULL_DOWNLOAD, server_media_usn=7)
+    harness = _patch_sync(monkeypatch, sync_responses=[_NO_CHANGES, _NO_CHANGES, _NO_CHANGES, push])
+
+    writer = AnkiSyncWriter(
+        shadow_root=tmp_path,
+        sync_endpoint="http://anki-sync.test",
+        credentials={"alice": "pw1"},
+    )
+    await writer.write_card(username="alice", content=_content())
+    _drop_exercise_audio_field(writer, "alice")
+
+    with pytest.raises(RuntimeError, match="full sync required after write"):
+        await writer.write_card(username="alice", content=_content(word="z", lemma="z"))
     assert harness.full_calls == []
 
 

@@ -137,9 +137,16 @@ class AnkiSyncWriter:
             # may flag a conflict that needs a full sync to resolve.
             pull = col.sync_collection(auth, sync_media=False)
             _reattach_before_write(col, pull, auth=auth)
+            schema_before = _schema_mod_time(col)
             card_id = add_vocab_note(col, content, direction=direction, lang=lang)
             push = col.sync_collection(auth, sync_media=True)
-            _resolve_after_write(col, push, auth=auth, username=username)
+            _resolve_after_write(
+                col,
+                push,
+                auth=auth,
+                username=username,
+                schema_changed=_schema_mod_time(col) != schema_before,
+            )
             _wait_for_media_sync(col, auth=auth, username=username)
             return card_id
         finally:
@@ -165,9 +172,16 @@ class AnkiSyncWriter:
             auth = self._get_or_login(username, col)
             pull = col.sync_collection(auth, sync_media=False)
             _reattach_before_write(col, pull, auth=auth)
+            schema_before = _schema_mod_time(col)
             update_vocab_note(col, card_id, fields, direction=direction, lang=lang)
             push = col.sync_collection(auth, sync_media=False)
-            _resolve_after_write(col, push, auth=auth, username=username)
+            _resolve_after_write(
+                col,
+                push,
+                auth=auth,
+                username=username,
+                schema_changed=_schema_mod_time(col) != schema_before,
+            )
         finally:
             col.close()
 
@@ -200,29 +214,45 @@ def _reattach_before_write(col: Collection, out: SyncCollectionResponse, *, auth
     col.full_upload_or_download(auth=auth, server_usn=out.server_media_usn, upload=False)
 
 
+def _schema_mod_time(col: Collection) -> int:
+    assert col.db is not None
+    return int(col.db.scalar("select scm from col"))
+
+
 def _resolve_after_write(
     col: Collection,
     out: SyncCollectionResponse,
     *,
     auth: SyncAuth,
     username: str,
+    schema_changed: bool,
 ) -> None:
-    """Resolve sync state after locally adding a note.
+    """Resolve sync state after locally adding or updating a note.
 
-    The new note brings new fields/templates with it (`_ensure_notetype`
-    bumps the notetype's mod-time), which on the very first write per
-    user prompts the server to demand a FULL_UPLOAD. That's the
-    legitimate path — we have more than the server, so we upload.
+    FULL_UPLOAD means the server is empty, so we upload.
 
-    FULL_DOWNLOAD or FULL_SYNC after our write is the dangerous case:
-    the server is claiming it has data we don't, and accepting that
-    would erase the note we just added. Raise instead — the caller
-    leaves the entry unsynced and the next worker tick retries."""
+    FULL_SYNC is ambiguous: the two sides' schema-mod-times differ. If our
+    write just changed the schema (`_ensure_notetype` added a field or
+    template), we caused it, and the pull right before the write means the
+    shadow already holds the server's state, so we upload. Clients then have
+    to download once. Anki can't merge a schema change incrementally.
+
+    Any other FULL_SYNC, and every FULL_DOWNLOAD, is the dangerous case: the
+    server is claiming it has data we don't, and accepting that could erase
+    the note we just wrote. Raise instead — the caller leaves the entry
+    unsynced and the next worker tick retries."""
     required = out.required
     if required in _INCREMENTAL_REQUIRED:
         return
-    if required == SyncCollectionResponse.FULL_UPLOAD:
-        log.info("anki-sync: full upload required after write user=%s", username)
+    if required == SyncCollectionResponse.FULL_UPLOAD or (
+        required == SyncCollectionResponse.FULL_SYNC and schema_changed
+    ):
+        log.info(
+            "anki-sync: full upload after write user=%s required=%s schema_changed=%s",
+            username,
+            required,
+            schema_changed,
+        )
         col.full_upload_or_download(auth=auth, server_usn=out.server_media_usn, upload=True)
         return
     raise RuntimeError(

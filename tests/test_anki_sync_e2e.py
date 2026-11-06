@@ -26,16 +26,19 @@ from typing import NamedTuple
 
 import pytest
 from anki.collection import Collection
-from anki.sync_pb2 import SyncCollectionResponse
+from anki.sync_pb2 import SyncAuth, SyncCollectionResponse
 
 from vocab_api.anki_sync import AnkiSyncWriter
-from vocab_api.anki_writer import VocabCardContent
+from vocab_api.anki_writer import NoteFieldUpdate, VocabCardContent
 
 
 class _SyncServer(NamedTuple):
     endpoint: str
     username: str
     password: str
+    # Its own collection, for tests that can't share one with `username`.
+    legacy_username: str
+    legacy_password: str
 
 
 def _find_free_port() -> int:
@@ -63,11 +66,14 @@ def anki_sync_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Sync
     port = _find_free_port()
     username = "ci"
     password = "cipw"
+    legacy_username = "legacy"
+    legacy_password = "legacypw"
     proc = subprocess.Popen(
         [sys.executable, "-m", "anki.syncserver"],
         env={
             **os.environ,
             "SYNC_USER1": f"{username}:{password}",
+            "SYNC_USER2": f"{legacy_username}:{legacy_password}",
             "SYNC_HOST": "127.0.0.1",
             "SYNC_PORT": str(port),
             "SYNC_BASE": str(server_root),
@@ -83,6 +89,8 @@ def anki_sync_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Sync
             endpoint=f"http://127.0.0.1:{port}/",
             username=username,
             password=password,
+            legacy_username=legacy_username,
+            legacy_password=legacy_password,
         )
     finally:
         proc.terminate()
@@ -165,3 +173,75 @@ async def test_written_card_reaches_anki_sync_server(
         assert note["Translation"] == "die Expedition"
     finally:
         col.close()
+
+
+def _push_pre_exercise_notetype(col: Collection, *, auth: SyncAuth) -> None:
+    """Put the server on the notetype it had before the Übung card existed."""
+    model = col.models.by_name("Vocab")
+    assert model is not None
+    model["tmpls"] = [t for t in model["tmpls"] if t["name"] != "Übung"]
+    col.models.update_dict(model)
+    model = col.models.by_name("Vocab")
+    assert model is not None
+    for field in [f for f in model["flds"] if f["name"].startswith("Exercise")]:
+        col.models.remove_field(model, field)
+    col.models.update_dict(model)
+    out = col.sync_collection(auth, sync_media=False)
+    assert out.required == SyncCollectionResponse.FULL_SYNC
+    col.full_upload_or_download(auth=auth, server_usn=out.server_media_usn, upload=True)
+
+
+async def test_update_reaches_a_server_still_on_the_pre_exercise_notetype(
+    anki_sync_server: _SyncServer, tmp_path: Path
+) -> None:
+    # Production before this fix: the first Anki write after the Übung card
+    # deploy added its fields, the server answered FULL_SYNC, and the writer
+    # refused every night. Mocks can't catch this, only the real protocol does.
+    server = anki_sync_server
+    username, password = server.legacy_username, server.legacy_password
+    credentials = {username: password}
+
+    seed_writer = AnkiSyncWriter(
+        shadow_root=tmp_path / "seed",
+        sync_endpoint=server.endpoint,
+        credentials=credentials,
+    )
+    card_id = await seed_writer.write_card(username=username, content=_content())
+
+    phone_path = tmp_path / "phone" / "collection.anki2"
+    phone_path.parent.mkdir(parents=True)
+    phone = Collection(str(phone_path))
+    try:
+        _sync_to_steady_state(phone, username=username, password=password, endpoint=server.endpoint)
+        auth = phone.sync_login(username, password, server.endpoint)
+        _push_pre_exercise_notetype(phone, auth=auth)
+    finally:
+        phone.close()
+
+    writer = AnkiSyncWriter(
+        shadow_root=tmp_path / "shadow",
+        sync_endpoint=server.endpoint,
+        credentials=credentials,
+    )
+    await writer.update_card(
+        username=username,
+        card_id=card_id,
+        fields=NoteFieldUpdate(cloze_sentence="A ___ north.", exercise_front="<p>Frage</p>"),
+    )
+    # Attached again: the next write needs no second full sync to get through.
+    await writer.write_card(username=username, content=_content(word="next", lemma="next"))
+
+    verify_path = tmp_path / "verify" / "collection.anki2"
+    verify_path.parent.mkdir(parents=True)
+    verify = Collection(str(verify_path))
+    try:
+        _sync_to_steady_state(
+            verify, username=username, password=password, endpoint=server.endpoint
+        )
+        assert verify.note_count() == 2
+        note = verify.get_card(card_id).note()
+        assert note["ExerciseFront"] == "<p>Frage</p>"
+        names = {verify.get_card(c).template()["name"] for c in verify.card_ids_of_note(note.id)}
+        assert "Übung" in names
+    finally:
+        verify.close()
