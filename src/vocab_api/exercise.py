@@ -2,9 +2,9 @@
 
 Each entry carries up to four exercises (multiple choice, synonym/antonym,
 monolingual definition, listening). The pool skips types whose
-data is missing; `active_exercise` picks one via the entry's `cloze_index`
-so the existing rotate-cloze job drives both the gap-sentence rotation and
-the exercise-type rotation with a single counter.
+data is missing; `active_exercise` picks one via the entry's id and
+`cloze_index`, so the existing rotate-cloze job drives both the gap-sentence
+rotation and the exercise-type rotation with a single counter.
 """
 
 from dataclasses import dataclass
@@ -41,7 +41,9 @@ def active_exercise(entry: Entry) -> Exercise | None:
     pool = exercise_pool(entry)
     if not pool:
         return None
-    return pool[entry.cloze_index % len(pool)]
+    # The nightly job bumps every entry together; the id keeps the whole deck
+    # from showing one exercise type at a time.
+    return pool[((entry.id or 0) + entry.cloze_index) % len(pool)]
 
 
 def _answer_line(entry: Entry) -> str:
@@ -52,8 +54,11 @@ def _answer_line(entry: Entry) -> str:
 def _multiple_choice(entry: Entry) -> Exercise:
     options = split_collocations(entry.mc_distractors or "")
     # Deterministic but rotation-dependent answer position: no random (a
-    # re-render must be reproducible) and no fixed slot to memorize.
-    position = ((entry.id or 0) + entry.cloze_index) % (len(options) + 1)
+    # re-render must be reproducible) and no fixed slot to memorize. Not the
+    # id + cloze_index sum that picks the type: with four types and four
+    # options, every choice card would have the answer in slot one.
+    slots = len(options) + 1
+    position = ((entry.id or 0) + entry.cloze_index // slots) % slots
     options.insert(position, entry.translation or "")
     items = "".join(f"<li>{option}</li>" for option in options)
     sentence = f'<p><em>„{entry.sentence}"</em></p>' if entry.sentence else ""
