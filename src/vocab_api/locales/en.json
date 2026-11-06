@@ -32,5 +32,11 @@
   "toast.error.not_translated": "Entry is not translated yet — please fill in lemma and translation.",
   "toast.error.not_found": "Entry not found.",
   "toast.error.generic": "Action failed — please try again.",
-  "toast.error.network": "Server unreachable — please try again."
+  "toast.error.network": "Server unreachable — please try again.",
+  "nav.translate": "Translate",
+  "page.translate.title": "Translate — vocab",
+  "page.translate.heading": "Translate",
+  "form.translate.placeholder": "Word or text",
+  "form.translate.submit": "Translate",
+  "form.translate.save": "Save to vocab"
 }

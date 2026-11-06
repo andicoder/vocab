@@ -19,6 +19,7 @@ from .models import TranslationCache
 TRANSLATE_ALIAS = "vocab-translate"
 PLAUSIBILITY_ALIAS = "vocab-plausibility"
 EXAMPLE_ALIAS = "vocab-example"
+LOOKUP_ALIAS = "vocab-lookup"
 
 _MAX_TOKENS = 16000
 
@@ -85,6 +86,16 @@ class ExerciseFields(BaseModel):
 # grammar compilation time out after 180 s on every request (#96).
 class TranslationResult(TranslationCore, ExerciseFields):
     pass
+
+
+class Lookup(BaseModel):
+    """A quick translation for the translator page, not a finished card."""
+
+    source_lang: Literal["en", "de"]
+    english: str
+    translation: str
+    alternatives: str
+    ipa: str
 
 
 class SenseMatch(BaseModel):
@@ -240,6 +251,23 @@ German translation: {translation}
 {sentence_block}
 """
 
+_LOOKUP_PROMPT = """\
+Translate the text. English goes into German, and German goes into English.
+{sentence_block}
+
+Text: {text}
+
+Return JSON:
+- source_lang: the language of the text, "en" or "de"
+- english: for a single word or short phrase, the English side in dictionary form,
+    lowercase, no article. Empty string for a whole sentence or anything longer.
+- translation: the translation, never empty, fitting the sentence if there is one.
+    A single word or short phrase goes in dictionary form, and German nouns take
+    their article. For German text this repeats the English word.
+- alternatives: comma-separated other translations, may be empty
+- ipa: US IPA in slashes for `english`, empty if `english` is empty
+"""
+
 _SENSE_MATCH_PROMPT = """\
 A learner's flashcards already cover some meanings of an English word. Decide
 whether a new occurrence has one of those meanings, so that the learner doesn't
@@ -380,6 +408,10 @@ class LlmClient:
         verdict = match.group(1)
         assert verdict in ("YES", "NO", "UNCLEAR")
         return verdict  # type: ignore[return-value]
+
+    async def lookup(self, *, text: str, sentence: str | None) -> Lookup:
+        prompt = _LOOKUP_PROMPT.format(text=text, sentence_block=_sentence_block(sentence))
+        return await self._parse(LOOKUP_ALIAS, prompt, Lookup)
 
     async def match_known_sense(
         self,

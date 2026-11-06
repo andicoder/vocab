@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ t("page.translate.title") }}{% endblock %}
+{% block content %}
+<h1>{{ t("page.translate.heading") }}</h1>
+<form hx-post="/ui/translate" hx-target="#result" hx-swap="innerHTML" hx-disabled-elt="button">
+    <input type="text" name="text" maxlength="1000"
+           placeholder="{{ t('form.translate.placeholder') }}" autofocus required>
+    <input type="text" name="sentence" maxlength="2000"
+           placeholder="{{ t('form.sentence.placeholder') }}">
+    <button type="submit" class="primary">{{ t("form.translate.submit") }}</button>
+</form>
+<div id="result"></div>
+{% endblock %}

@@ -1,0 +1,12 @@
+<div class="lookup-result">
+    <h2>{{ result.translation or result.english }}</h2>
+    {% if result.alternatives %}<p>{{ result.alternatives }}</p>{% endif %}
+    {% if result.ipa %}<p><small>{{ result.english }} {{ result.ipa }}</small></p>{% endif %}
+    {% if result.english %}
+    <form hx-post="/ui/vocab" hx-target="#result" hx-swap="innerHTML" hx-disabled-elt="button">
+        <input type="hidden" name="word" value="{{ save_word }}">
+        <input type="hidden" name="sentence" value="{{ save_sentence }}">
+        <button type="submit">{{ t("form.translate.save") }}</button>
+    </form>
+    {% endif %}
+</div>

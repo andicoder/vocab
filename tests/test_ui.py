@@ -1,11 +1,14 @@
 import asyncio
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
+from tests.llm_fake import make_llm, reply
 from tests.test_routes import stub_translation_llm
 from vocab_api.anki_writer import AnkiWriter
 from vocab_api.audio import LocalDirAudioStorage
@@ -313,3 +316,134 @@ def test_bookmarklet_uses_public_base_url_when_set(
     response = http_client.get("/bookmarklet", headers=_alice())
     assert response.status_code == 200
     assert "https://vocab.example.com/?" in response.text
+
+
+def _stub_lookup(**overrides: str) -> None:
+    payload = {
+        "source_lang": "en",
+        "english": "eager",
+        "translation": "begierig",
+        "alternatives": "",
+        "ipa": "/ˈiɡər/",
+    }
+    payload.update(overrides)
+
+    def handler(request):
+        return reply(json.dumps(payload))
+
+    llm, _ = make_llm(handler)
+    app.dependency_overrides[get_llm] = lambda: llm
+
+
+def test_translator_page_requires_auth(http_client: TestClient):
+    assert http_client.get("/translate").status_code == 401
+
+
+def test_translator_page_shows_the_form(http_client: TestClient):
+    response = http_client.get("/translate", headers=_alice())
+
+    assert response.status_code == 200
+    assert 'hx-post="/ui/translate"' in response.text
+
+
+def test_lookup_shows_the_translation_and_offers_to_save_the_english_word(
+    http_client: TestClient,
+):
+    _stub_lookup(alternatives="gespannt")
+
+    response = http_client.post(
+        "/ui/translate",
+        data={"text": "eager", "sentence": "He was eager to go."},
+        headers=_alice(),
+    )
+
+    assert response.status_code == 200
+    assert "begierig" in response.text
+    assert "gespannt" in response.text
+    assert "/ˈiɡər/" in response.text
+    assert 'hx-post="/ui/vocab"' in response.text
+    assert 'name="word" value="eager"' in response.text
+    assert 'value="He was eager to go."' in response.text
+
+
+def test_lookup_saves_the_surface_form_so_the_sentence_still_contains_it(
+    http_client: TestClient,
+):
+    # The card's gap comes from masking this word in the sentence; the worker
+    # finds the lemma itself.
+    _stub_lookup(english="smirk", translation="grinsen")
+
+    response = http_client.post(
+        "/ui/translate",
+        data={"text": "smirked", "sentence": "He smirked at her."},
+        headers=_alice(),
+    )
+
+    assert 'name="word" value="smirked"' in response.text
+    assert 'value="He smirked at her."' in response.text
+
+
+def test_german_lookup_saves_the_english_word_without_the_german_sentence(
+    http_client: TestClient,
+):
+    _stub_lookup(source_lang="de", english="butterfly", translation="butterfly")
+
+    response = http_client.post(
+        "/ui/translate",
+        data={"text": "Schmetterling", "sentence": "Der Schmetterling flog weg."},
+        headers=_alice(),
+    )
+
+    assert 'name="word" value="butterfly"' in response.text
+    assert "Der Schmetterling flog weg." not in response.text
+
+
+def test_lookup_shows_the_english_word_when_the_model_leaves_the_translation_empty(
+    http_client: TestClient,
+):
+    # Seen in the real run: "Schmetterling" returned only english="butterfly".
+    _stub_lookup(source_lang="de", english="butterfly", translation="")
+
+    response = http_client.post("/ui/translate", data={"text": "Schmetterling"}, headers=_alice())
+
+    assert "<h2>butterfly</h2>" in response.text
+
+
+def test_lookup_does_not_create_an_entry(http_client: TestClient):
+    _stub_lookup()
+
+    http_client.post("/ui/translate", data={"text": "unsavedlookup"}, headers=_alice())
+
+    async def _count() -> int:
+        async with engine.connect() as conn:
+            row = await conn.execute(
+                text("SELECT count(*) FROM vocab.entry WHERE word = 'unsavedlookup'")
+            )
+            return row.scalar_one()
+
+    assert asyncio.run(_count()) == 0
+
+
+def test_lookup_of_a_whole_sentence_offers_no_save(http_client: TestClient):
+    # No single word to learn, so a card would have nothing to teach.
+    _stub_lookup(english="", translation="Er wollte gehen.")
+
+    response = http_client.post(
+        "/ui/translate", data={"text": "He wanted to go."}, headers=_alice()
+    )
+
+    assert "Er wollte gehen." in response.text
+    assert "/ui/vocab" not in response.text
+
+
+def test_lookup_failure_shows_a_toast(http_client: TestClient):
+    def handler(request):
+        return httpx2.Response(500, json={"error": {"message": "boom"}})
+
+    llm, _ = make_llm(handler)
+    app.dependency_overrides[get_llm] = lambda: llm
+
+    response = http_client.post("/ui/translate", data={"text": "eager"}, headers=_alice())
+
+    assert response.status_code == 200
+    assert response.headers["HX-Retarget"] == "#toast"

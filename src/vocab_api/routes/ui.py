@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Annotated, Any
 
+import anthropic
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -23,7 +24,7 @@ from ..deps import (
     get_tts,
 )
 from ..i18n import current_locale, translator_for
-from ..llm import LlmClient
+from ..llm import LlmClient, LlmOutputError
 from ..models import Entry, User
 from ..operations import (
     ApprovalDeps,
@@ -113,6 +114,41 @@ async def index_page(
                 "sentence": sentence or "",
                 "source": source or "",
             },
+        },
+    )
+
+
+@router.get("/translate", response_class=HTMLResponse)
+async def translator_page(
+    request: Request,
+    user: Annotated[User, Depends(current_user)],
+) -> Response:
+    return _render(request, "translate.html", {"active": "translate"})
+
+
+@router.post("/ui/translate", response_class=HTMLResponse)
+async def htmx_lookup(
+    request: Request,
+    user: Annotated[User, Depends(current_user)],
+    llm: Annotated[LlmClient, Depends(get_llm)],
+    text: Annotated[str, Form(min_length=1, max_length=1000)],
+    sentence: Annotated[str | None, Form(max_length=2000)] = None,
+) -> Response:
+    try:
+        result = await llm.lookup(text=text, sentence=sentence or None)
+    except (anthropic.APIError, LlmOutputError):
+        log.exception("lookup failed user=%s", user.username)
+        return _unexpected_error_toast(request)
+    # An English encounter keeps its surface form and sentence, the same input
+    # the add form takes. A German one has only the English word to offer.
+    is_english = result.source_lang == "en"
+    return _render(
+        request,
+        "partials/lookup_result.html",
+        {
+            "result": result,
+            "save_word": text if is_english else result.english,
+            "save_sentence": (sentence or "") if is_english else "",
         },
     )
 
