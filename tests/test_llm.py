@@ -569,6 +569,35 @@ async def test_match_known_sense_shows_both_sides_to_the_model():
         assert expected in prompt
 
 
+async def test_lookup_uses_its_own_alias_and_returns_the_fields():
+    captured: dict = {}
+    payload = {
+        "source_lang": "en",
+        "english": "eager",
+        "translation": "begierig",
+        "alternatives": "gespannt",
+        "ipa": "/ˈiɡər/",
+    }
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx2.Response(200, json=_message(json.dumps(payload)))
+
+    client, http = _make_client(handler)
+    try:
+        result = await client.lookup(text="eager", sentence="He got out, eager to see her.")
+    finally:
+        await http.aclose()
+
+    assert captured["body"]["model"] == "vocab-lookup"
+    prompt = captured["body"]["messages"][0]["content"]
+    assert "eager" in prompt
+    assert "He got out, eager to see her." in prompt
+    assert result.translation == "begierig"
+    assert result.english == "eager"
+    assert "dictionary form" in prompt
+
+
 async def test_plausibility_yes():
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, json=_message("YES"))
