@@ -7,6 +7,7 @@ import pytest
 from vocab_api.llm import (
     _TRANSLATE_PROMPT,
     InventedExample,
+    KnownSense,
     LlmClient,
     LlmOutputError,
     Plausibility,
@@ -504,6 +505,68 @@ async def test_translate_raises_on_http_error():
             await client.translate(word="x", sentence=None)
     finally:
         await http.aclose()
+
+
+_KNOWN_SENSES = [
+    KnownSense(
+        sense_key="adjective-desirous",
+        translation="begierig",
+        sense_label="eifrig",
+        sentence="Eager to leave, he ran.",
+    ),
+    KnownSense(sense_key="noun-other", translation="x", sense_label="", sentence=None),
+]
+_NEW_SENSE = TranslationResult(
+    lemma="eager",
+    translation="gespannt",
+    alternatives="",
+    ipa="",
+    sense_key="adjective-keen",
+    sense_label="neugierig",
+)
+
+
+async def _match(reply_key: str, captured: dict | None = None) -> str | None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if captured is not None:
+            captured["body"] = json.loads(request.content)
+        return httpx2.Response(200, json=_message(json.dumps({"sense_key": reply_key})))
+
+    client, http = _make_client(handler)
+    try:
+        return await client.match_known_sense(
+            sentence="He got out, eager to see her.", translation=_NEW_SENSE, known=_KNOWN_SENSES
+        )
+    finally:
+        await http.aclose()
+
+
+async def test_match_known_sense_returns_an_offered_key():
+    assert await _match("adjective-desirous") == "adjective-desirous"
+
+
+@pytest.mark.parametrize("reply_key", ["", "adjective-made-up"])
+async def test_match_known_sense_returns_none_unless_a_key_was_offered(reply_key: str):
+    assert await _match(reply_key) is None
+
+
+async def test_match_known_sense_shows_both_sides_to_the_model():
+    captured: dict = {}
+    await _match("", captured)
+
+    prompt = captured["body"]["messages"][0]["content"]
+    assert captured["body"]["model"] == "vocab-plausibility"
+    for expected in (
+        "eager",
+        "He got out, eager to see her.",
+        "gespannt",
+        "neugierig",
+        "adjective-desirous",
+        "begierig",
+        "eifrig",
+        "Eager to leave, he ran.",
+    ):
+        assert expected in prompt
 
 
 async def test_plausibility_yes():

@@ -1,5 +1,6 @@
 import hashlib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -84,6 +85,20 @@ class ExerciseFields(BaseModel):
 # grammar compilation time out after 180 s on every request (#96).
 class TranslationResult(TranslationCore, ExerciseFields):
     pass
+
+
+class SenseMatch(BaseModel):
+    sense_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class KnownSense:
+    """One meaning of a lemma that the user already has a card for."""
+
+    sense_key: str
+    translation: str
+    sense_label: str
+    sentence: str | None
 
 
 class InventedExample(BaseModel):
@@ -217,6 +232,32 @@ German translation: {translation}
 {sentence_block}
 """
 
+_SENSE_MATCH_PROMPT = """\
+A learner's flashcards already cover some meanings of an English word. Decide
+whether a new occurrence has one of those meanings, so that the learner doesn't
+get a second card for the same thing.
+
+Word: {lemma}
+
+New occurrence:
+- German translation: {translation}
+- German hint: {sense_label}
+{sentence_block}
+
+Known meanings:
+{known}
+
+Return JSON with one field:
+- sense_key: the slug of the known meaning this occurrence has, copied exactly,
+    or an empty string if it has none of them.
+
+It is the same meaning when a dictionary would list both under one definition,
+even if the slugs or the German words differ ("vermasseln" and "verpfuschen"
+for "screw up"). It is a different meaning when the part of speech differs, or
+when a dictionary would list them as separate definitions, even if German
+happens to use one word for both.
+"""
+
 _INVENT_EXAMPLE_PROMPT = """\
 Invent a short, natural English example sentence (≤ 15 words) that uses the
 given lemma in a clear, idiomatic context. Then return JSON:
@@ -332,6 +373,24 @@ class LlmClient:
         assert verdict in ("YES", "NO", "UNCLEAR")
         return verdict  # type: ignore[return-value]
 
+    async def match_known_sense(
+        self,
+        *,
+        sentence: str | None,
+        translation: TranslationResult,
+        known: Sequence[KnownSense],
+    ) -> str | None:
+        """The known sense_key this occurrence shares a meaning with, if any."""
+        prompt = _SENSE_MATCH_PROMPT.format(
+            lemma=translation.lemma,
+            translation=translation.translation,
+            sense_label=translation.sense_label or "(none)",
+            sentence_block=_sentence_block(sentence),
+            known="\n".join(_describe_sense(sense) for sense in known),
+        )
+        match = await self._parse(PLAUSIBILITY_ALIAS, prompt, SenseMatch)
+        return match.sense_key if match.sense_key in {s.sense_key for s in known} else None
+
     async def _parse[T: BaseModel](self, alias: str, prompt: str, output: type[T]) -> T:
         response = await self._client.messages.parse(
             model=alias,
@@ -343,6 +402,12 @@ class LlmClient:
         if parsed is None:
             raise LlmOutputError(f"alias={alias} returned no structured output")
         return parsed
+
+
+def _describe_sense(sense: KnownSense) -> str:
+    hint = f" ({sense.sense_label})" if sense.sense_label else ""
+    example = f', e.g. "{sense.sentence}"' if sense.sentence else ""
+    return f"- {sense.sense_key}: {sense.translation}{hint}{example}"
 
 
 def _checked[M: Message](response: M) -> M:

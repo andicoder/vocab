@@ -33,16 +33,23 @@ _KIND_BY_ALIAS = {
 
 
 def _classify(request: httpx2.Request) -> str:
+    # Sense matching shares the plausibility alias but asks for structured output.
+    if b"output_config" in request.content and alias_of(request) == "vocab-plausibility":
+        return "sense_match"
     return _KIND_BY_ALIAS[alias_of(request)]
 
 
-def _make_handler(translate_payload: dict, verdict: str, invented: dict | None = None):
+def _make_handler(
+    translate_payload: dict, verdict: str, invented: dict | None = None, sense_match: str = ""
+):
     def handler(request: httpx2.Request) -> httpx2.Response:
         kind = _classify(request)
         if kind == "translate":
             text = json.dumps(translate_payload)
         elif kind == "invent":
             text = json.dumps(invented or _DEFAULT_INVENTED)
+        elif kind == "sense_match":
+            text = json.dumps({"sense_key": sense_match})
         else:
             text = verdict
         return reply(text)
@@ -62,9 +69,11 @@ def _make_translate_only_handler(translate_payload: dict):
     return handler
 
 
-def _counting_handler(translate_payload: dict, verdict: str, invented: dict | None = None):
+def _counting_handler(
+    translate_payload: dict, verdict: str, invented: dict | None = None, sense_match: str = ""
+):
     """Same as _make_handler but exposes a per-kind call counter."""
-    counts: dict[str, int] = {"translate": 0, "plausibility": 0, "invent": 0}
+    counts: dict[str, int] = {"translate": 0, "plausibility": 0, "invent": 0, "sense_match": 0}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         kind = _classify(request)
@@ -73,6 +82,8 @@ def _counting_handler(translate_payload: dict, verdict: str, invented: dict | No
             text = json.dumps(translate_payload)
         elif kind == "invent":
             text = json.dumps(invented or _DEFAULT_INVENTED)
+        elif kind == "sense_match":
+            text = json.dumps({"sense_key": sense_match})
         else:
             text = verdict
         return reply(text)
@@ -1083,6 +1094,144 @@ async def test_polyseme_same_lemma_same_sense_is_dropped(db_session: AsyncSessio
     await db_session.flush()
     assert await db_session.get(Entry, pending_id) is None
     assert tts.calls == []
+
+
+_EAGER_PAYLOAD = {
+    "lemma": "eager",
+    "translation": "begierig",
+    "alternatives": "",
+    "ipa": "/ˈiɡər/",
+    "sense_key": "adjective-keen",
+    "sense_label": "gespannt",
+}
+
+
+async def _pending_eager_with_known_sense(db_session: AsyncSession) -> tuple[User, Entry, int]:
+    user = User(username="alice")
+    db_session.add(user)
+    await db_session.flush()
+    known = Entry(
+        user_id=user.id,
+        word="Eager",
+        lemma="eager",
+        sentence="Eager to put distance between them, he left.",
+        translation="begierig",
+        sense_key="adjective-desirous",
+        sense_label="begierig, eifrig",
+        status="synced",
+        lang="en",
+    )
+    pending = Entry(
+        user_id=user.id, word="eager", sentence="He got out, eager to see her.", lang="en"
+    )
+    db_session.add_all([known, pending])
+    await db_session.flush()
+    return user, pending, known.id
+
+
+async def test_same_meaning_under_a_different_sense_key_is_dropped(
+    db_session: AsyncSession, tmp_path: Path
+):
+    # #71: the model invents sense_key per call, so one meaning lands under
+    # `adjective-desirous` and `adjective-keen` and the user gets two cards.
+    user, pending, known_id = await _pending_eager_with_known_sense(db_session)
+    pending_id = pending.id
+    handler, counts = _counting_handler(_EAGER_PAYLOAD, "YES", sense_match="adjective-desirous")
+    llm, http = _llm_client(handler)
+
+    try:
+        result = await process_entry(
+            session=db_session,
+            entry=pending,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=_FakeTts(), storage=_FakeStorage()),
+        )
+    finally:
+        await http.aclose()
+
+    assert result is not None
+    assert result.id == known_id
+    await db_session.flush()
+    assert await db_session.get(Entry, pending_id) is None
+    assert counts["plausibility"] == 0
+
+
+@pytest.mark.parametrize("sense_match", ["", "adjective-made-up"])
+async def test_new_meaning_or_unknown_match_keeps_the_new_card(
+    db_session: AsyncSession, tmp_path: Path, sense_match: str
+):
+    # A key we never offered is the model hallucinating; losing a word to it
+    # would be worse than one extra card.
+    user, pending, _ = await _pending_eager_with_known_sense(db_session)
+    llm, http = _llm_client(_make_handler(_EAGER_PAYLOAD, "YES", sense_match=sense_match))
+
+    try:
+        result = await process_entry(
+            session=db_session,
+            entry=pending,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=_FakeTts(), storage=_FakeStorage()),
+        )
+    finally:
+        await http.aclose()
+
+    assert result is None
+    assert pending.status == "synced"
+    assert pending.sense_key == "adjective-keen"
+
+
+async def test_sense_match_is_not_requested_for_a_first_time_lemma(
+    db_session: AsyncSession, tmp_path: Path
+):
+    user, entry = await _make_pending_entry(db_session)
+    handler, counts = _counting_handler(_TRANSLATE_PAYLOAD, "YES")
+    llm, http = _llm_client(handler)
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=_FakeTts(), storage=_FakeStorage()),
+        )
+    finally:
+        await http.aclose()
+
+    assert counts["sense_match"] == 0
+
+
+async def test_sense_match_only_looks_at_the_users_own_cards(
+    db_session: AsyncSession, tmp_path: Path
+):
+    other = User(username="bob")
+    db_session.add(other)
+    await db_session.flush()
+    db_session.add(
+        Entry(
+            user_id=other.id,
+            word="expedition",
+            lemma="expedition",
+            translation="die Expedition",
+            sense_key="noun-other",
+            status="synced",
+            lang="en",
+        )
+    )
+    user, entry = await _make_pending_entry(db_session)
+    handler, counts = _counting_handler(_TRANSLATE_PAYLOAD, "YES")
+    llm, http = _llm_client(handler)
+
+    try:
+        await process_entry(
+            session=db_session,
+            entry=entry,
+            user=user,
+            deps=_deps(tmp_path=tmp_path, llm=llm, tts=_FakeTts(), storage=_FakeStorage()),
+        )
+    finally:
+        await http.aclose()
+
+    assert counts["sense_match"] == 0
 
 
 async def test_caches_survive_anki_write_failure(db_session: AsyncSession, tmp_path: Path):
