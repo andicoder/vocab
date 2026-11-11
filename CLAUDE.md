@@ -94,3 +94,13 @@ The deploy pipeline lives in a separate (private) infrastructure repo and consum
 ## Out of scope (for now)
 
 - Multi-language support beyond English source / German target. Schema is open for it but the code paths assume `en→de`.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub issues on `andicoder/vocab` (always `gh ... -R andicoder/vocab`). See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root, created lazily. See `docs/agents/domain.md`.
